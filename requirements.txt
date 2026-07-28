@@ -3,7 +3,4 @@ pypdf
 anthropic
 pandas
 openpyxl
-<<<<<<< HEAD
-=======
- 
->>>>>>> feature/mawaddah
+
