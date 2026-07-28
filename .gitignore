@@ -1,2 +1,6 @@
+<<<<<<< HEAD
 .streamlit/secrets.toml
 .DS_Store
+=======
+.streamlit/secrets.toml
+>>>>>>> feature/mawaddah

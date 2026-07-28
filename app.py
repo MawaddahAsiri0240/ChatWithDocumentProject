@@ -221,12 +221,20 @@ def build_chart_dataframe(df, spec):
     return df.iloc[:, 0].value_counts().head(20)
 
 
+<<<<<<< HEAD
 def icon_pattern_layer(emoji, tile=64, opacity=0.55):
     """Build a tiled SVG background of a repeating emoji icon.
 
     This is what turns a plain wallpaper color into a fun themed pattern
     (e.g. dolphins), while keeping the same tiled/polka-dot feel as the
     Default background.
+=======
+def icon_pattern_layer(emoji, tile=64, opacity=0.14):
+    """Build a tiled SVG background of a repeating emoji icon.
+
+    Kept very faint (low opacity) on purpose, so it reads the same as the
+    subtle Default dot pattern rather than competing with page content.
+>>>>>>> feature/mawaddah
     """
     svg = (
         f"<svg xmlns='http://www.w3.org/2000/svg' width='{tile}' height='{tile}'>"
@@ -327,7 +335,11 @@ else:
     icon_layer = icon_pattern_layer(theme["icon"])
     wash = theme[wallpaper_mode]
     wallpaper_background = f"{icon_layer}, {wash}"
+<<<<<<< HEAD
     wallpaper_size = "70px 70px, cover"
+=======
+    wallpaper_size = "56px 56px, cover"
+>>>>>>> feature/mawaddah
     wallpaper_position = "0 0, center"
     wallpaper_repeat = "repeat, no-repeat"
 
@@ -1058,3 +1070,7 @@ if st.session_state.screen == "csv":
                     st.error(f"Couldn't build that chart: {e}")
     else:
         st.info("Upload a CSV or Excel file above to get started.")
+<<<<<<< HEAD
+=======
+        
+>>>>>>> feature/mawaddah
