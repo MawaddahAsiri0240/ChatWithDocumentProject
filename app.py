@@ -41,7 +41,13 @@ if "dark_mode" not in st.session_state:
 
 if "wallpaper" not in st.session_state:
     st.session_state.wallpaper = "Default"   
+    
+if "doc_summaries" not in st.session_state:
+    st.session_state.doc_summaries = {}
 
+if "doc_pages" not in st.session_state:
+    st.session_state.doc_pages = {}
+    
 def extract_pages(uploaded_file):
     """Pull the plain text out of an uploaded PDF, one entry per page.
 
@@ -579,18 +585,67 @@ st.divider()
 # SECTION 1 — PDF document Q&A
 # ==============================================================================
 st.subheader("Ask a PDF document")
-uploaded_file = st.file_uploader("Upload a PDF", type="pdf", key="pdf_uploader")
+uploaded_files = st.file_uploader(
+    "Upload one or more PDFs", type="pdf", accept_multiple_files=True, key="pdf_uploader"
+)
 
-if uploaded_file is not None:
-    if uploaded_file.name not in st.session_state.uploaded_documents:
-        st.session_state.uploaded_documents.append(uploaded_file.name)
+if uploaded_files:
+    # ---- Process every newly uploaded file (page extraction + summary) -----
+    # Cached in session_state per filename so re-uploading the same batch on
+    # a rerun doesn't re-call the API for files we've already summarized.
+    for f in uploaded_files:
+        if f.name not in st.session_state.uploaded_documents:
+            st.session_state.uploaded_documents.append(f.name)
 
-    pages = extract_pages(uploaded_file)
+        if f.name not in st.session_state.doc_pages:
+            st.session_state.doc_pages[f.name] = extract_pages(f)
+
+        if f.name not in st.session_state.doc_summaries:
+            with st.spinner(f"Summarizing {f.name}..."):
+                st.session_state.doc_summaries[f.name] = summarize_document(
+                    st.session_state.doc_pages[f.name]
+                )
+
+    # ---- Document summary card per uploaded file (added feature) -----------
+    for f in uploaded_files:
+        pages_f = st.session_state.doc_pages[f.name]
+        page_count = len(pages_f)
+        word_count = sum(len(p["text"].split()) for p in pages_f)
+        summary_text = st.session_state.doc_summaries[f.name]
+
+        st.markdown(f"**{f.name}**")
+        st.markdown(
+            f"""
+            <div class="nqb-summary">
+                <div class="nqb-summary-stats">
+                    <div>
+                        <div class="nqb-summary-value">{page_count}</div>
+                        <div class="nqb-summary-label">Pages</div>
+                    </div>
+                    <div>
+                        <div class="nqb-summary-value">{word_count:,}</div>
+                        <div class="nqb-summary-label">Words</div>
+                    </div>
+                </div>
+                <div class="nqb-summary-text">{summary_text}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     # TODO 2 (important!): a long document may be too big to send in one go.
     # For now the whole thing is sent, which works for short PDFs. Once the
     # basics work, handle long documents -- the simplest approach is to only
     # send the most relevant part of the text instead of all of it.
+
+    # ---- Pick which uploaded document to ask about (multi-file support) ----
+    doc_names = [f.name for f in uploaded_files]
+    selected_doc = (
+        st.selectbox("Ask about which document?", doc_names)
+        if len(doc_names) > 1
+        else doc_names[0]
+    )
+    pages = st.session_state.doc_pages[selected_doc]
 
     question = st.text_input(
         "Your question",
@@ -606,6 +661,7 @@ if uploaded_file is not None:
                 "question": question,
                 "answer": answer,
                 "citations": citations,
+                "document": selected_doc,
             }
         )
 
