@@ -15,6 +15,7 @@ WHERE YOUR WORK IS
 import streamlit as st
 import pandas as pd
 import json
+import base64
 from pypdf import PdfReader
 from anthropic import Anthropic
 
@@ -37,6 +38,12 @@ if "generated_charts" not in st.session_state:
 
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = True
+
+if "bg_style" not in st.session_state:
+    st.session_state.bg_style = "Dotted"
+
+if "custom_bg_bytes" not in st.session_state:
+    st.session_state.custom_bg_bytes = None
 
 
 def extract_pages(uploaded_file):
@@ -218,6 +225,41 @@ DARK = {
 C = DARK if st.session_state.dark_mode else LIGHT
 
 # ----------------------------------------------------------------------------
+# Background style
+# ----------------------------------------------------------------------------
+# Built from the "Appearance" controls in the sidebar. Each style just
+# produces a CSS snippet that gets dropped into .stApp below.
+if st.session_state.bg_style == "Custom image" and st.session_state.custom_bg_bytes:
+    b64_bg = base64.b64encode(st.session_state.custom_bg_bytes).decode()
+    # A translucent theme-color wash sits between the image and the content
+    # so text stays readable regardless of what the uploaded image looks like.
+    background_css = f"""
+        background-image:
+            linear-gradient({C["bg"]}CC, {C["bg"]}CC),
+            url("data:image/png;base64,{b64_bg}");
+        background-size: cover;
+        background-position: center;
+        background-attachment: fixed;
+    """
+elif st.session_state.bg_style == "Gradient":
+    background_css = f"""
+        background-image: linear-gradient(135deg, {C["accent_soft"]}, {C["accent2_soft"]});
+        background-attachment: fixed;
+    """
+elif st.session_state.bg_style == "Solid":
+    background_css = ""
+else:
+    # "Dotted" (default), and the fallback if "Custom image" is chosen but
+    # nothing has been uploaded yet.
+    background_css = f"""
+        background-image:
+            radial-gradient({C["dot1"]} 22%, transparent 23%),
+            radial-gradient({C["dot2"]} 22%, transparent 23%);
+        background-size: 90px 90px;
+        background-position: 0 0, 45px 45px;
+    """
+
+# ----------------------------------------------------------------------------
 # Look & feel
 # ----------------------------------------------------------------------------
 st.set_page_config(page_title="Dataset Assistant | Sejel Tech", layout="centered")
@@ -234,11 +276,7 @@ st.markdown(
     .stApp {{
         background-color: {C["bg"]};
         color: {C["text"]};
-        background-image:
-            radial-gradient({C["dot1"]} 22%, transparent 23%),
-            radial-gradient({C["dot2"]} 22%, transparent 23%);
-        background-size: 90px 90px;
-        background-position: 0 0, 45px 45px;
+        {background_css}
     }}
 
     /* ---------- Header block ---------- */
@@ -460,6 +498,32 @@ with st.sidebar:
     if st.button("Clear query log"):
         st.session_state.chat_history = []
         st.rerun()
+
+    st.divider()
+
+    st.subheader("Appearance")
+    st.selectbox(
+        "Background",
+        ["Dotted", "Gradient", "Solid", "Custom image"],
+        key="bg_style",
+    )
+
+    if st.session_state.bg_style == "Custom image":
+        bg_upload = st.file_uploader(
+            "Upload a background image",
+            type=["png", "jpg", "jpeg"],
+            key="bg_uploader",
+        )
+        if bg_upload is not None:
+            st.session_state.custom_bg_bytes = bg_upload.getvalue()
+
+        if st.session_state.custom_bg_bytes:
+            st.caption("Custom background active.")
+            if st.button("Remove custom background"):
+                st.session_state.custom_bg_bytes = None
+                st.rerun()
+        else:
+            st.caption("No image uploaded yet — using the dotted pattern for now.")
 
 # ----------------------------------------------------------------------------
 # The page
