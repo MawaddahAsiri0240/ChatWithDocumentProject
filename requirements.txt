@@ -1,3 +1,6 @@
 streamlit
-anthropic
 pypdf
+anthropic
+pandas
+openpyxl
+ 
