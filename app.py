@@ -39,12 +39,15 @@ if "generated_charts" not in st.session_state:
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = True
 
-
 if "wallpaper" not in st.session_state:
     st.session_state.wallpaper = "Default"
 
 if "custom_wallpaper" not in st.session_state:
-    st.session_state.custom_wallpaper = None    
+    st.session_state.custom_wallpaper = None
+
+if "doc_summaries" not in st.session_state:
+    st.session_state.doc_summaries = {}
+
 
 def extract_pages(uploaded_file):
     """Pull the plain text out of an uploaded PDF, one entry per page.
@@ -60,6 +63,31 @@ def extract_pages(uploaded_file):
     for i, page in enumerate(reader.pages, start=1):
         pages.append({"page": i, "text": page.extract_text() or ""})
     return pages
+
+
+def summarize_document(pages):
+    """Ask Claude for a short, plain-language summary of the document.
+
+    Feeds the document summary card -- shown right after upload, so the
+    user gets a quick sense of what's in the file before asking anything.
+    """
+    document_text = "\n\n".join(p["text"] for p in pages)
+    prompt = f"""
+Summarize the following document in 2-3 short sentences, in plain language.
+Focus on what the document actually is and its main topic or purpose.
+Do not use outside knowledge, only summarize what's in the text below.
+
+Document:
+{document_text}
+
+Summary:
+"""
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=200,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.content[0].text.strip()
 
 
 def answer_question(pages, question):
@@ -273,15 +301,14 @@ st.markdown(
     }}
 
     .stApp {{
-    background-color: {C["bg"]};
-    background-image: {wallpaper_background};
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
-    background-attachment: fixed;
-    color: {C["text"]};
-}}
-        
+        background-color: {C["bg"]};
+        background-image: {wallpaper_background};
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+        background-attachment: fixed;
+        color: {C["text"]};
+    }}
 
     /* ---------- Header block ---------- */
     .nqb-eyebrow {{
@@ -451,6 +478,37 @@ st.markdown(
         border-radius: 16px;
         color: {C["text"]};
     }}
+
+    /* ---------- Document summary card (added feature) ---------- */
+    .nqb-summary {{
+        background-color: {C["surface_alt"]};
+        border: 1px solid {C["border"]};
+        border-radius: 20px;
+        box-shadow: {C["shadow"]};
+        padding: 1rem 1.2rem;
+        margin-bottom: 0.8rem;
+    }}
+    .nqb-summary-stats {{
+        display: flex;
+        gap: 1.4rem;
+        margin-bottom: 0.5rem;
+    }}
+    .nqb-summary-value {{
+        font-family: 'Baloo 2', sans-serif;
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: {C["accent"]};
+    }}
+    .nqb-summary-label {{
+        font-size: 0.72rem;
+        color: {C["muted"]};
+    }}
+    .nqb-summary-text {{
+        font-size: 0.9rem;
+        color: {C["text"]};
+        border-top: 1px dashed {C["border"]};
+        padding-top: 0.5rem;
+    }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -520,7 +578,6 @@ with st.sidebar:
     st.divider()
 
     st.subheader("Documents")
-
     if st.session_state.uploaded_documents:
         for i, doc in enumerate(st.session_state.uploaded_documents, start=1):
             st.markdown(
@@ -584,6 +641,36 @@ if uploaded_file is not None:
         st.session_state.uploaded_documents.append(uploaded_file.name)
 
     pages = extract_pages(uploaded_file)
+    page_count = len(pages)
+    word_count = sum(len(p["text"].split()) for p in pages)
+
+    # ---- Document summary card (added feature) -----------------------------
+    # Generated once per file (cached in session_state) so we don't re-call
+    # the API on every rerun/keystroke.
+    if uploaded_file.name not in st.session_state.doc_summaries:
+        with st.spinner("Summarizing document..."):
+            st.session_state.doc_summaries[uploaded_file.name] = summarize_document(pages)
+
+    summary_text = st.session_state.doc_summaries[uploaded_file.name]
+
+    st.markdown(
+        f"""
+        <div class="nqb-summary">
+            <div class="nqb-summary-stats">
+                <div>
+                    <div class="nqb-summary-value">{page_count}</div>
+                    <div class="nqb-summary-label">Pages</div>
+                </div>
+                <div>
+                    <div class="nqb-summary-value">{word_count:,}</div>
+                    <div class="nqb-summary-label">Words</div>
+                </div>
+            </div>
+            <div class="nqb-summary-text">{summary_text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # TODO 2 (important!): a long document may be too big to send in one go.
     # For now the whole thing is sent, which works for short PDFs. Once the
