@@ -47,6 +47,12 @@ if "doc_summaries" not in st.session_state:
 if "doc_pages" not in st.session_state:
     st.session_state.doc_pages = {}
 
+if "library" not in st.session_state:
+    st.session_state.library = {}
+
+if "show_library" not in st.session_state:
+    st.session_state.show_library = False
+
 
 def extract_pages(uploaded_file):
     """Pull the plain text out of an uploaded PDF, one entry per page.
@@ -527,6 +533,37 @@ st.markdown(
         border-top: 1px dashed {C["border"]};
         padding-top: 0.5rem;
     }}
+    /* ---------- Library ---------- */
+    .nqb-library-grid {{
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 1rem;
+        margin-top: 1rem;
+    }}
+    .nqb-library-book {{
+        min-height: 185px;
+        padding: 1rem;
+        border-radius: 10px 16px 16px 10px;
+        background-color: {C["surface_alt"]};
+        border: 1px solid {C["border"]};
+        box-shadow: {C["shadow"]};
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        text-align: center;
+        color: {C["text"]};
+    }}
+    .nqb-library-cover {{
+        font-size: 2.2rem;
+        padding-top: 1rem;
+    }}
+    .nqb-library-title {{
+        font-family: 'Baloo 2', sans-serif;
+        font-weight: 700;
+        font-size: 0.9rem;
+        overflow-wrap: anywhere;
+    }}
+
     </style>
     """,
     unsafe_allow_html=True,
@@ -590,6 +627,11 @@ with st.sidebar:
                     st.session_state.wallpaper = wallpaper_name
                     st.rerun()
 
+    st.subheader("Library")
+    if st.button("Open Library", key="open_library", use_container_width=True):
+        st.session_state.show_library = True
+        st.rerun()
+
     st.divider()
 
     st.subheader("Documents")
@@ -644,6 +686,42 @@ with top_right:
     st.toggle("Dark", key="dark_mode")
 
 st.divider()
+
+if st.session_state.show_library:
+    library_title, library_back = st.columns([5, 1])
+    with library_title:
+        st.title("Library")
+        st.caption("Your saved library will be displayed here.")
+    with library_back:
+        if st.button("Back", key="library_back"):
+            st.session_state.show_library = False
+            st.rerun()
+
+    if st.session_state.library:
+        cards = []
+        for filename in st.session_state.library:
+            safe_filename = (
+                filename.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+            )
+            cards.append(
+                f"""
+                <div class="nqb-library-book">
+                    <div class="nqb-library-cover">📄</div>
+                    <div class="nqb-library-title">{safe_filename}</div>
+                </div>
+                """
+            )
+
+        st.markdown(
+            f"<div class='nqb-library-grid'>{''.join(cards)}</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.info("Your library is empty. Ask a question about a PDF, then choose to save it here.")
+
+    st.stop()
 
 # ==============================================================================
 # SECTION 1 — PDF document Q&A
@@ -726,11 +804,12 @@ if uploaded_files:
                 "answer": answer,
                 "citations": citations,
                 "document": selected_doc,
+                "library_prompt": True,
             }
         )
 
     st.markdown("**Conversation**")
-    for chat in st.session_state.chat_history:
+    for chat_index, chat in enumerate(st.session_state.chat_history):
         with st.chat_message("user"):
             st.markdown("<span class='nqb-tag'>Question</span>", unsafe_allow_html=True)
             st.write(chat["question"])
@@ -749,6 +828,33 @@ if uploaded_files:
                         f"</div>",
                         unsafe_allow_html=True,
                     )
+
+            if chat.get("library_prompt"):
+                st.caption("Would you like to add this document to your library?")
+                library_yes, library_no = st.columns(2)
+
+                with library_yes:
+                    if st.button(
+                        "Yes",
+                        key=f"library_yes_{chat_index}",
+                        use_container_width=True,
+                    ):
+                        document_name = chat.get("document")
+                        if document_name:
+                            st.session_state.library[document_name] = {
+                                "title": document_name
+                            }
+                        chat["library_prompt"] = False
+                        st.rerun()
+
+                with library_no:
+                    if st.button(
+                        "No",
+                        key=f"library_no_{chat_index}",
+                        use_container_width=True,
+                    ):
+                        chat["library_prompt"] = False
+                        st.rerun()
 else:
     st.info("Upload a PDF above to get started.")
 
