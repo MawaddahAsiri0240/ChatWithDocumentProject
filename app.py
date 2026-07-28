@@ -15,7 +15,7 @@ WHERE YOUR WORK IS
 import streamlit as st
 import pandas as pd
 import json
-import base64
+import urllib.parse
 from pypdf import PdfReader
 from anthropic import Anthropic
 
@@ -37,13 +37,25 @@ if "generated_charts" not in st.session_state:
     st.session_state.generated_charts = []
 
 if "dark_mode" not in st.session_state:
-    st.session_state.dark_mode = True
+    st.session_state.dark_mode = False
 
-if "bg_style" not in st.session_state:
-    st.session_state.bg_style = "Dotted"
+if "wallpaper" not in st.session_state:
+    st.session_state.wallpaper = "Default"   
+    
+if "doc_summaries" not in st.session_state:
+    st.session_state.doc_summaries = {}
 
-if "custom_bg_bytes" not in st.session_state:
-    st.session_state.custom_bg_bytes = None
+if "doc_pages" not in st.session_state:
+    st.session_state.doc_pages = {}
+
+if "library" not in st.session_state:
+    st.session_state.library = {}
+
+if "show_library" not in st.session_state:
+    st.session_state.show_library = False
+
+if "screen" not in st.session_state:
+    st.session_state.screen = "welcome"
 
 
 def extract_pages(uploaded_file):
@@ -60,6 +72,31 @@ def extract_pages(uploaded_file):
     for i, page in enumerate(reader.pages, start=1):
         pages.append({"page": i, "text": page.extract_text() or ""})
     return pages
+
+
+def summarize_document(pages):
+    """Ask Claude for a short, plain-language summary of the document.
+
+    Feeds the document summary card -- shown right after upload, so the
+    user gets a quick sense of what's in the file before asking anything.
+    """
+    document_text = "\n\n".join(p["text"] for p in pages)
+    prompt = f"""
+Summarize the following document in 2-3 short sentences, in plain language.
+Focus on what the document actually is and its main topic or purpose.
+Do not use outside knowledge, only summarize what's in the text below.
+
+Document:
+{document_text}
+
+Summary:
+"""
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=200,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.content[0].text.strip()
 
 
 def answer_question(pages, question):
@@ -184,6 +221,23 @@ def build_chart_dataframe(df, spec):
     return df.iloc[:, 0].value_counts().head(20)
 
 
+def icon_pattern_layer(emoji, tile=64, opacity=0.55):
+    """Build a tiled SVG background of a repeating emoji icon.
+
+    This is what turns a plain wallpaper color into a fun themed pattern
+    (e.g. dolphins), while keeping the same tiled/polka-dot feel as the
+    Default background.
+    """
+    svg = (
+        f"<svg xmlns='http://www.w3.org/2000/svg' width='{tile}' height='{tile}'>"
+        f"<text x='50%' y='58%' font-size='{int(tile * 0.55)}' "
+        f"text-anchor='middle' dominant-baseline='middle' opacity='{opacity}'>"
+        f"{emoji}</text></svg>"
+    )
+    encoded = urllib.parse.quote(svg)
+    return f'url("data:image/svg+xml,{encoded}")'
+
+
 # ----------------------------------------------------------------------------
 # Theme tokens
 # ----------------------------------------------------------------------------
@@ -225,44 +279,62 @@ DARK = {
 C = DARK if st.session_state.dark_mode else LIGHT
 
 # ----------------------------------------------------------------------------
-# Background style
+# Wallpaper backgrounds
 # ----------------------------------------------------------------------------
-# Built from the "Appearance" controls in the sidebar. Each style just
-# produces a CSS snippet that gets dropped into .stApp below.
-if st.session_state.bg_style == "Custom image" and st.session_state.custom_bg_bytes:
-    b64_bg = base64.b64encode(st.session_state.custom_bg_bytes).decode()
-    # A translucent theme-color wash sits between the image and the content
-    # so text stays readable regardless of what the uploaded image looks like.
-    background_css = f"""
-        background-image:
-            linear-gradient({C["bg"]}CC, {C["bg"]}CC),
-            url("data:image/png;base64,{b64_bg}");
-        background-size: cover;
-        background-position: center;
-        background-attachment: fixed;
-    """
-elif st.session_state.bg_style == "Gradient":
-    background_css = f"""
-        background-image: linear-gradient(135deg, {C["accent_soft"]}, {C["accent2_soft"]});
-        background-attachment: fixed;
-    """
-elif st.session_state.bg_style == "Solid":
-    background_css = ""
+WALLPAPERS = {
+    "Rose": {
+        "light": "linear-gradient(135deg, #FFF1F3 0%, #FFDDE3 100%)",
+        "dark": "linear-gradient(135deg, #2A171D 0%, #4A2732 100%)",
+        "light_preview": "#F5B8C2",
+        "dark_preview": "#6B3544",
+        "icon": "🌸",
+    },
+    "Mint": {
+        "light": "linear-gradient(135deg, #F0FFF9 0%, #D5F5E8 100%)",
+        "dark": "linear-gradient(135deg, #14251F 0%, #25443A 100%)",
+        "light_preview": "#A9DDC8",
+        "dark_preview": "#356B59",
+        "icon": "🍃",
+    },
+    "Blue": {
+        "light": "linear-gradient(135deg, #EEF6FF 0%, #D6E9FA 100%)",
+        "dark": "linear-gradient(135deg, #151F2C 0%, #243C55 100%)",
+        "light_preview": "#A9CDEB",
+        "dark_preview": "#345B7C",
+        "icon": "🐬",
+    },
+    "Purple": {
+        "light": "linear-gradient(135deg, #F7F1FF 0%, #E5D8F5 100%)",
+        "dark": "linear-gradient(135deg, #20182C 0%, #3C2A50 100%)",
+        "light_preview": "#C9AFE5",
+        "dark_preview": "#60487B",
+        "icon": "✨",
+    },
+}
+
+wallpaper_mode = "dark" if st.session_state.dark_mode else "light"
+
+if st.session_state.wallpaper == "Default":
+    wallpaper_background = (
+        f"radial-gradient({C['dot1']} 22%, transparent 23%), "
+        f"radial-gradient({C['dot2']} 22%, transparent 23%)"
+    )
+    wallpaper_size = "90px 90px"
+    wallpaper_position = "0 0, 45px 45px"
+    wallpaper_repeat = "repeat"
 else:
-    # "Dotted" (default), and the fallback if "Custom image" is chosen but
-    # nothing has been uploaded yet.
-    background_css = f"""
-        background-image:
-            radial-gradient({C["dot1"]} 22%, transparent 23%),
-            radial-gradient({C["dot2"]} 22%, transparent 23%);
-        background-size: 90px 90px;
-        background-position: 0 0, 45px 45px;
-    """
+    theme = WALLPAPERS[st.session_state.wallpaper]
+    icon_layer = icon_pattern_layer(theme["icon"])
+    wash = theme[wallpaper_mode]
+    wallpaper_background = f"{icon_layer}, {wash}"
+    wallpaper_size = "70px 70px, cover"
+    wallpaper_position = "0 0, center"
+    wallpaper_repeat = "repeat, no-repeat"
 
 # ----------------------------------------------------------------------------
 # Look & feel
 # ----------------------------------------------------------------------------
-st.set_page_config(page_title="Dataset Assistant | Sejel Tech", layout="centered")
+st.set_page_config(page_title="Insight", layout="centered")
 
 st.markdown(
     f"""
@@ -275,8 +347,12 @@ st.markdown(
 
     .stApp {{
         background-color: {C["bg"]};
+        background-image: {wallpaper_background};
+        background-size: {wallpaper_size};
+        background-position: {wallpaper_position};
+        background-repeat: {wallpaper_repeat};
+        background-attachment: fixed;
         color: {C["text"]};
-        {background_css}
     }}
 
     /* ---------- Header block ---------- */
@@ -358,6 +434,15 @@ st.markdown(
         border: 2px dashed {C["border"]} !important;
         border-radius: 20px !important;
     }}
+    [data-testid="stFileUploaderDropzoneInstructions"] * {{
+        color: {C["text"]} !important;
+    }}
+    [data-testid="stFileUploaderDropzoneInstructions"] small {{
+        color: {C["muted"]} !important;
+    }}
+    [data-testid="stFileUploaderDropzone"] svg {{
+        fill: {C["muted"]} !important;
+    }}
 
     .stTextInput > div > div {{
         background-color: {C["surface"]};
@@ -369,6 +454,10 @@ st.markdown(
         color: {C["text"]} !important;
         font-size: 0.95rem;
         padding-left: 0.5rem !important;
+    }}
+    .stTextInput input::placeholder {{
+        color: {C["muted"]} !important;
+        opacity: 1 !important;
     }}
 
     .stButton > button {{
@@ -386,6 +475,13 @@ st.markdown(
         background-color: {C["accent_hover"]};
         color: #FFFFFF;
         transform: translateY(-1px) scale(1.02);
+    }}
+
+    section[data-testid="stSidebar"] .stButton > button {{
+        padding: 0.22rem 0.15rem;
+        font-size: 0.68rem;
+        min-height: 1.9rem;
+        border-radius: 7px;
     }}
 
     /* ---------- Chat ---------- */
@@ -447,6 +543,91 @@ st.markdown(
         border-radius: 16px;
         color: {C["text"]};
     }}
+
+    /* ---------- Document summary card (added feature) ---------- */
+    .nqb-summary {{
+        background-color: {C["surface_alt"]};
+        border: 1px solid {C["border"]};
+        border-radius: 20px;
+        box-shadow: {C["shadow"]};
+        padding: 1rem 1.2rem;
+        margin-bottom: 0.8rem;
+    }}
+    .nqb-summary-stats {{
+        display: flex;
+        gap: 1.4rem;
+        margin-bottom: 0.5rem;
+    }}
+    .nqb-summary-value {{
+        font-family: 'Baloo 2', sans-serif;
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: {C["accent"]};
+    }}
+    .nqb-summary-label {{
+        font-size: 0.72rem;
+        color: {C["muted"]};
+    }}
+    .nqb-summary-text {{
+        font-size: 0.9rem;
+        color: {C["text"]};
+        border-top: 1px dashed {C["border"]};
+        padding-top: 0.5rem;
+    }}
+    /* ---------- Library ---------- */
+    .nqb-library-grid {{
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 1rem;
+        margin-top: 1rem;
+    }}
+    .nqb-library-book {{
+        min-height: 185px;
+        padding: 1rem;
+        border-radius: 10px 16px 16px 10px;
+        background-color: {C["surface_alt"]};
+        border: 1px solid {C["border"]};
+        box-shadow: {C["shadow"]};
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        text-align: center;
+        color: {C["text"]};
+    }}
+    .nqb-library-cover {{
+        font-size: 2.2rem;
+        padding-top: 1rem;
+    }}
+    .nqb-library-title {{
+        font-family: 'Baloo 2', sans-serif;
+        font-weight: 700;
+        font-size: 0.9rem;
+        overflow-wrap: anywhere;
+    }}
+
+    /* ---------- Welcome screen ---------- */
+    .nqb-choice-card {{
+        background-color: {C["surface"]};
+        border: 1px solid {C["border"]};
+        border-radius: 22px;
+        box-shadow: {C["shadow"]};
+        padding: 1.4rem 1.2rem 1rem 1.2rem;
+        text-align: center;
+        margin-bottom: 0.6rem;
+    }}
+    .nqb-choice-title {{
+        font-family: 'Baloo 2', sans-serif;
+        font-weight: 700;
+        font-size: 1.15rem;
+        color: {C["text"]};
+        margin-bottom: 0.3rem;
+    }}
+    .nqb-choice-desc {{
+        font-size: 0.85rem;
+        color: {C["muted"]};
+        margin-bottom: 0.2rem;
+    }}
+
     </style>
     """,
     unsafe_allow_html=True,
@@ -457,7 +638,65 @@ st.markdown(
 # ----------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("<div class='nqb-eyebrow'>Sejel Tech</div>", unsafe_allow_html=True)
-    st.title("Data Sources")
+    st.subheader("Sources")
+
+    # Wallpaper Background
+    with st.expander("Wallpaper"):
+        st.caption("Choose a background")
+
+        if st.button(
+            "Default",
+            key="wallpaper_default",
+            use_container_width=True,
+        ):
+            st.session_state.wallpaper = "Default"
+            st.rerun()
+
+        wallpaper_names = ["Rose", "Mint", "Blue", "Purple"]
+        preview_mode = "dark" if st.session_state.dark_mode else "light"
+
+        wallpaper_row_1 = st.columns(2)
+        wallpaper_row_2 = st.columns(2)
+
+        for index, wallpaper_name in enumerate(wallpaper_names):
+            target_column = wallpaper_row_1[index] if index < 2 else wallpaper_row_2[index - 2]
+
+            with target_column:
+                preview_color = WALLPAPERS[wallpaper_name][f"{preview_mode}_preview"]
+
+                st.markdown(
+                    f"""
+                    <div style="
+                        width: 34px;
+                        height: 34px;
+                        background: {preview_color};
+                        border-radius: 6px;
+                        margin: 0 auto 4px auto;
+                        border: 1px solid rgba(120,120,120,0.25);
+                    "></div>
+                    <div style="
+                        text-align: center;
+                        font-size: 0.72rem;
+                        margin-bottom: 0.25rem;
+                    ">{wallpaper_name}</div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                if st.button(
+                    "Choose",
+                    key=f"wallpaper_{wallpaper_name}",
+                    use_container_width=True,
+                ):
+                    st.session_state.wallpaper = wallpaper_name
+                    st.rerun()
+
+    st.subheader("Library")
+    if st.button("Open Library", key="open_library", use_container_width=True):
+        st.session_state.show_library = True
+        st.rerun()
+
+    st.divider()
 
     st.subheader("Documents")
     if st.session_state.uploaded_documents:
@@ -499,212 +738,323 @@ with st.sidebar:
         st.session_state.chat_history = []
         st.rerun()
 
-    st.divider()
-
-    st.subheader("Appearance")
-    st.selectbox(
-        "Background",
-        ["Dotted", "Gradient", "Solid", "Custom image"],
-        key="bg_style",
-    )
-
-    if st.session_state.bg_style == "Custom image":
-        bg_upload = st.file_uploader(
-            "Upload a background image",
-            type=["png", "jpg", "jpeg"],
-            key="bg_uploader",
-        )
-        if bg_upload is not None:
-            st.session_state.custom_bg_bytes = bg_upload.getvalue()
-
-        if st.session_state.custom_bg_bytes:
-            st.caption("Custom background active.")
-            if st.button("Remove custom background"):
-                st.session_state.custom_bg_bytes = None
-                st.rerun()
-        else:
-            st.caption("No image uploaded yet — using the dotted pattern for now.")
-
 # ----------------------------------------------------------------------------
 # The page
 # ----------------------------------------------------------------------------
 top_left, top_right = st.columns([5, 1])
 with top_left:
-    st.markdown("<div class='nqb-eyebrow'>Database / Dataset Q&A</div>", unsafe_allow_html=True)
-    st.title("Dataset Assistant")
-    st.caption("Upload a PDF to ask questions, or a dataset to visualize it.")
+    st.markdown("<div class='nqb-eyebrow'>Sejel Tech</div>", unsafe_allow_html=True)
+    st.title("Insight")
+    st.caption("Get insight from a document or a dataset.")
 with top_right:
     st.toggle("Dark", key="dark_mode")
 
 st.divider()
 
+if st.session_state.show_library:
+    library_title, library_back = st.columns([5, 1])
+    with library_title:
+        st.title("Library")
+        st.caption("Your saved library will be displayed here.")
+    with library_back:
+        if st.button("Back", key="library_back"):
+            st.session_state.show_library = False
+            st.rerun()
+
+    if st.session_state.library:
+        cards = []
+        for filename in st.session_state.library:
+            safe_filename = (
+                filename.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+            )
+            cards.append(
+                f"""
+                <div class="nqb-library-book">
+                    <div class="nqb-library-cover">📄</div>
+                    <div class="nqb-library-title">{safe_filename}</div>
+                </div>
+                """
+            )
+
+        st.markdown(
+            f"<div class='nqb-library-grid'>{''.join(cards)}</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.info("Your library is empty. Ask a question about a PDF, then choose to save it here.")
+
+    st.stop()
+
+if st.session_state.screen == "welcome":
+    st.write("")
+    col_pdf, col_csv = st.columns(2)
+
+    with col_pdf:
+        st.markdown(
+            """
+            <div class="nqb-choice-card">
+                <div class="nqb-choice-title">Ask a PDF document</div>
+                <div class="nqb-choice-desc">Upload a PDF and ask questions,
+                with answers grounded in the source and page citations.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("Ask a document", key="go_pdf", use_container_width=True):
+            st.session_state.screen = "pdf"
+            st.rerun()
+
+    with col_csv:
+        st.markdown(
+            """
+            <div class="nqb-choice-card">
+                <div class="nqb-choice-title">Visualize a dataset</div>
+                <div class="nqb-choice-desc">Upload a CSV or Excel file for
+                an instant quick-look dashboard, plus a chart builder.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("Visualize data", key="go_csv", use_container_width=True):
+            st.session_state.screen = "csv"
+            st.rerun()
+
+    st.stop()
+
+if st.button("← Back to home", key="back_home"):
+    st.session_state.screen = "welcome"
+    st.rerun()
+
+st.write("")
+
 # ==============================================================================
 # SECTION 1 — PDF document Q&A
 # ==============================================================================
-st.subheader("Ask a PDF document")
-uploaded_file = st.file_uploader("Upload a PDF", type="pdf", key="pdf_uploader")
-
-if uploaded_file is not None:
-    if uploaded_file.name not in st.session_state.uploaded_documents:
-        st.session_state.uploaded_documents.append(uploaded_file.name)
-
-    pages = extract_pages(uploaded_file)
-
-    # TODO 2 (important!): a long document may be too big to send in one go.
-    # For now the whole thing is sent, which works for short PDFs. Once the
-    # basics work, handle long documents -- the simplest approach is to only
-    # send the most relevant part of the text instead of all of it.
-
-    question = st.text_input(
-        "Your question",
-        placeholder="e.g. What columns does this dataset contain?",
+if st.session_state.screen == "pdf":
+    st.subheader("Ask a PDF document")
+    uploaded_files = st.file_uploader(
+        "Upload one or more PDFs", type="pdf", accept_multiple_files=True, key="pdf_uploader"
     )
 
-    if st.button("Ask", key="ask_pdf") and question:
-        with st.spinner("Reading..."):
-            answer, citations = answer_question(pages, question)
+    if uploaded_files:
+        for f in uploaded_files:
+            if f.name not in st.session_state.uploaded_documents:
+                st.session_state.uploaded_documents.append(f.name)
 
-        st.session_state.chat_history.append(
-            {
-                "question": question,
-                "answer": answer,
-                "citations": citations,
-            }
+            if f.name not in st.session_state.doc_pages:
+                st.session_state.doc_pages[f.name] = extract_pages(f)
+
+            if f.name not in st.session_state.doc_summaries:
+                with st.spinner(f"Summarizing {f.name}..."):
+                    st.session_state.doc_summaries[f.name] = summarize_document(
+                        st.session_state.doc_pages[f.name]
+                    )
+
+        for f in uploaded_files:
+            pages_f = st.session_state.doc_pages[f.name]
+            page_count = len(pages_f)
+            word_count = sum(len(p["text"].split()) for p in pages_f)
+            summary_text = st.session_state.doc_summaries[f.name]
+
+            st.markdown(f"**{f.name}**")
+            st.markdown(
+                f"""
+                <div class="nqb-summary">
+                    <div class="nqb-summary-stats">
+                        <div>
+                            <div class="nqb-summary-value">{page_count}</div>
+                            <div class="nqb-summary-label">Pages</div>
+                        </div>
+                        <div>
+                            <div class="nqb-summary-value">{word_count:,}</div>
+                            <div class="nqb-summary-label">Words</div>
+                        </div>
+                    </div>
+                    <div class="nqb-summary-text">{summary_text}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        doc_names = [f.name for f in uploaded_files]
+        selected_doc = (
+            st.selectbox("Ask about which document?", doc_names)
+            if len(doc_names) > 1
+            else doc_names[0]
+        )
+        pages = st.session_state.doc_pages[selected_doc]
+
+        question = st.text_input(
+            "Your question",
+            placeholder="e.g. What columns does this dataset contain?",
         )
 
-    st.markdown("**Conversation**")
-    for chat in st.session_state.chat_history:
-        with st.chat_message("user"):
-            st.markdown("<span class='nqb-tag'>Question</span>", unsafe_allow_html=True)
-            st.write(chat["question"])
-        with st.chat_message("assistant"):
-            st.markdown("<span class='nqb-tag answer'>Answer</span>", unsafe_allow_html=True)
-            st.write(chat["answer"])
+        if st.button("Ask", key="ask_pdf") and question:
+            with st.spinner("Reading..."):
+                answer, citations = answer_question(pages, question)
 
-            citations = chat.get("citations") or []
-            if citations:
-                st.markdown("**Sources**")
-                for c in citations:
-                    st.markdown(
-                        f"<div class='nqb-row'>"
-                        f"<span class='nqb-row-index'>p{c.get('page', '?')}</span>"
-                        f"<span>&ldquo;{c.get('excerpt', '')}&rdquo;</span>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-else:
-    st.info("Upload a PDF above to get started.")
+            st.session_state.chat_history.append(
+                {
+                    "question": question,
+                    "answer": answer,
+                    "citations": citations,
+                    "document": selected_doc,
+                    "library_prompt": True,
+                }
+            )
+
+        st.markdown("**Conversation**")
+        for chat_index, chat in enumerate(st.session_state.chat_history):
+            with st.chat_message("user"):
+                st.markdown("<span class='nqb-tag'>Question</span>", unsafe_allow_html=True)
+                st.write(chat["question"])
+            with st.chat_message("assistant"):
+                st.markdown("<span class='nqb-tag answer'>Answer</span>", unsafe_allow_html=True)
+                st.write(chat["answer"])
+
+                citations = chat.get("citations") or []
+                if citations:
+                    st.markdown("**Sources**")
+                    for c in citations:
+                        st.markdown(
+                            f"<div class='nqb-row'>"
+                            f"<span class='nqb-row-index'>p{c.get('page', '?')}</span>"
+                            f"<span>&ldquo;{c.get('excerpt', '')}&rdquo;</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                if chat.get("library_prompt"):
+                    st.caption("Would you like to add this document to your library?")
+                    library_yes, library_no = st.columns(2)
+
+                    with library_yes:
+                        if st.button(
+                            "Yes",
+                            key=f"library_yes_{chat_index}",
+                            use_container_width=True,
+                        ):
+                            document_name = chat.get("document")
+                            if document_name:
+                                st.session_state.library[document_name] = {
+                                    "title": document_name
+                                }
+                            chat["library_prompt"] = False
+                            st.rerun()
+
+                    with library_no:
+                        if st.button(
+                            "No",
+                            key=f"library_no_{chat_index}",
+                            use_container_width=True,
+                        ):
+                            chat["library_prompt"] = False
+                            st.rerun()
+    else:
+        st.info("Upload a PDF above to get started.")
 
 st.divider()
 
 # ==============================================================================
 # SECTION 2 — CSV / Excel dataset (quick-look dashboard + free-text charts)
 # ==============================================================================
-st.subheader("Visualize a dataset")
-uploaded_data_file = st.file_uploader(
-    "Upload a CSV or Excel file", type=["csv", "xlsx"], key="data_uploader"
-)
-
-if uploaded_data_file is not None:
-    if uploaded_data_file.name not in st.session_state.uploaded_datasets:
-        st.session_state.uploaded_datasets.append(uploaded_data_file.name)
-
-    if uploaded_data_file.name.endswith(".xlsx"):
-        df = pd.read_excel(uploaded_data_file)
-    else:
-        df = pd.read_csv(uploaded_data_file)
-
-    # ---- Quick-look metrics -------------------------------------------------
-    missing_pct = round(df.isna().mean().mean() * 100, 1)
-    duplicate_rows = int(df.duplicated().sum())
-
-    m1, m2, m3, m4 = st.columns(4)
-    for col, value, label in [
-        (m1, f"{len(df):,}", "Rows"),
-        (m2, f"{len(df.columns):,}", "Columns"),
-        (m3, f"{missing_pct}%", "Missing values"),
-        (m4, f"{duplicate_rows:,}", "Duplicate rows"),
-    ]:
-        with col:
-            st.markdown(
-                f"<div class='nqb-metric'>"
-                f"<div class='nqb-metric-value'>{value}</div>"
-                f"<div class='nqb-metric-label'>{label}</div>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-
-    st.write("")
-    st.markdown("**Quick look**")
-
-    # ---- Auto-detect column types -------------------------------------------
-    datetime_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
-    if not datetime_cols:
-        # try to sniff date-like text columns without crashing on the rest
-        for c in df.select_dtypes(include="object").columns:
-            try:
-                parsed = pd.to_datetime(df[c], errors="raise")
-                df[c] = parsed
-                datetime_cols.append(c)
-                break
-            except (ValueError, TypeError):
-                continue
-
-    numeric_cols = df.select_dtypes(include="number").columns.tolist()
-    categorical_cols = [
-        c for c in df.select_dtypes(include="object").columns if c not in datetime_cols
-    ]
-
-    # Trend chart: first datetime column x first numeric column
-    if datetime_cols and numeric_cols:
-        st.caption(f"Trend of {numeric_cols[0]} over {datetime_cols[0]}")
-        trend = df.set_index(datetime_cols[0])[numeric_cols[0]].sort_index()
-        st.line_chart(trend)
-
-    # Category breakdown: top 10 values of the first categorical column
-    if categorical_cols:
-        st.caption(f"Top values in {categorical_cols[0]}")
-        st.bar_chart(df[categorical_cols[0]].value_counts().head(10))
-
-    # Distribution: histogram-style bucket counts of the first numeric column
-    if numeric_cols:
-        st.caption(f"Distribution of {numeric_cols[0]}")
-        bucketed = pd.cut(df[numeric_cols[0]].dropna(), bins=10).value_counts().sort_index()
-        bucketed.index = bucketed.index.astype(str)
-        st.bar_chart(bucketed)
-
-    if not datetime_cols and not numeric_cols and not categorical_cols:
-        st.info("Couldn't detect any chartable columns in this file.")
-
-    st.divider()
-
-    # ---- Describe-what-you-want chart builder -------------------------------
-    st.markdown("**Build a chart**")
-    chart_request = st.text_input(
-        "Describe the chart you want",
-        placeholder="e.g. show me the top 10 categories by total amount",
+if st.session_state.screen == "csv":
+    st.subheader("Visualize a dataset")
+    uploaded_data_file = st.file_uploader(
+        "Upload a CSV or Excel file", type=["csv", "xlsx"], key="data_uploader"
     )
 
-    if st.button("Generate chart", key="generate_chart") and chart_request:
-        with st.spinner("Thinking..."):
-            try:
-                spec = suggest_chart_spec(df, chart_request)
-                chart_df = build_chart_dataframe(df, spec)
-                st.session_state.generated_charts.append(
-                    {"request": chart_request, "spec": spec}
-                )
-                st.markdown(f"**{spec.get('title', chart_request)}**")
-                if spec.get("chart_type") == "line":
-                    st.line_chart(chart_df)
-                elif spec.get("chart_type") == "area":
-                    st.area_chart(chart_df)
-                else:
-                    st.bar_chart(chart_df)
-            except Exception as e:
-                st.error(f"Couldn't build that chart: {e}")
+    if uploaded_data_file is not None:
+        if uploaded_data_file.name not in st.session_state.uploaded_datasets:
+            st.session_state.uploaded_datasets.append(uploaded_data_file.name)
 
-    # TODO (stretch): let the user download the generated chart's
-    # underlying data as a CSV, and show past charts from
-    # st.session_state.generated_charts in the sidebar.
-else:
-    st.info("Upload a CSV or Excel file above to get started.")
+        if uploaded_data_file.name.endswith(".xlsx"):
+            df = pd.read_excel(uploaded_data_file)
+        else:
+            df = pd.read_csv(uploaded_data_file)
+
+        missing_pct = round(df.isna().mean().mean() * 100, 1)
+        duplicate_rows = int(df.duplicated().sum())
+
+        m1, m2, m3, m4 = st.columns(4)
+        for col, value, label in [
+            (m1, f"{len(df):,}", "Rows"),
+            (m2, f"{len(df.columns):,}", "Columns"),
+            (m3, f"{missing_pct}%", "Missing values"),
+            (m4, f"{duplicate_rows:,}", "Duplicate rows"),
+        ]:
+            with col:
+                st.markdown(
+                    f"<div class='nqb-metric'>"
+                    f"<div class='nqb-metric-value'>{value}</div>"
+                    f"<div class='nqb-metric-label'>{label}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+        st.write("")
+        st.markdown("**Quick look**")
+
+        datetime_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
+        if not datetime_cols:
+            for c in df.select_dtypes(include="object").columns:
+                try:
+                    parsed = pd.to_datetime(df[c], errors="raise")
+                    df[c] = parsed
+                    datetime_cols.append(c)
+                    break
+                except (ValueError, TypeError):
+                    continue
+
+        numeric_cols = df.select_dtypes(include="number").columns.tolist()
+        categorical_cols = [
+            c for c in df.select_dtypes(include="object").columns if c not in datetime_cols
+        ]
+
+        if datetime_cols and numeric_cols:
+            st.caption(f"Trend of {numeric_cols[0]} over {datetime_cols[0]}")
+            trend = df.set_index(datetime_cols[0])[numeric_cols[0]].sort_index()
+            st.line_chart(trend)
+
+        if categorical_cols:
+            st.caption(f"Top values in {categorical_cols[0]}")
+            st.bar_chart(df[categorical_cols[0]].value_counts().head(10))
+
+        if numeric_cols:
+            st.caption(f"Distribution of {numeric_cols[0]}")
+            bucketed = pd.cut(df[numeric_cols[0]].dropna(), bins=10).value_counts().sort_index()
+            bucketed.index = bucketed.index.astype(str)
+            st.bar_chart(bucketed)
+
+        if not datetime_cols and not numeric_cols and not categorical_cols:
+            st.info("Couldn't detect any chartable columns in this file.")
+
+        st.divider()
+
+        st.markdown("**Build a chart**")
+        chart_request = st.text_input(
+            "Describe the chart you want",
+            placeholder="e.g. show me the top 10 categories by total amount",
+        )
+
+        if st.button("Generate chart", key="generate_chart") and chart_request:
+            with st.spinner("Thinking..."):
+                try:
+                    spec = suggest_chart_spec(df, chart_request)
+                    chart_df = build_chart_dataframe(df, spec)
+                    st.session_state.generated_charts.append(
+                        {"request": chart_request, "spec": spec}
+                    )
+                    st.markdown(f"**{spec.get('title', chart_request)}**")
+                    if spec.get("chart_type") == "line":
+                        st.line_chart(chart_df)
+                    elif spec.get("chart_type") == "area":
+                        st.area_chart(chart_df)
+                    else:
+                        st.bar_chart(chart_df)
+                except Exception as e:
+                    st.error(f"Couldn't build that chart: {e}")
+    else:
+        st.info("Upload a CSV or Excel file above to get started.")
