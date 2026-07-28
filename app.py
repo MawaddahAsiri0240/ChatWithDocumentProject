@@ -15,6 +15,7 @@ WHERE YOUR WORK IS
 import streamlit as st
 from pypdf import PdfReader
 from anthropic import Anthropic
+import base64
 
 # The API key is read from Streamlit "secrets" so it never lives in the code.
 # See the README for how to add the secret before running.
@@ -29,6 +30,12 @@ if "chat_history" not in st.session_state:
 
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = False
+
+if "wallpaper" not in st.session_state:
+    st.session_state.wallpaper = "Default"
+
+if "custom_wallpaper" not in st.session_state:
+    st.session_state.custom_wallpaper = None    
 
 
 def extract_text(uploaded_file):
@@ -104,6 +111,41 @@ DARK = {
     "accent_hover": "#4FB99E",
 }
 C = DARK if st.session_state.dark_mode else LIGHT
+C = DARK if st.session_state.dark_mode else LIGHT
+
+# ----------------------------------------------------------------------------
+# Wallpaper backgrounds
+# ----------------------------------------------------------------------------
+WALLPAPERS = {
+    "Default": {
+        "light": "none",
+        "dark": "none",
+        "icon": "⬜",
+    },
+    "Soft Gradient": {
+        "light": "linear-gradient(135deg, #F8F4EC 0%, #E4EFE9 100%)",
+        "dark": "linear-gradient(135deg, #14181A 0%, #24332F 100%)",
+        "icon": "🌿",
+    },
+    "Blue": {
+        "light": "linear-gradient(135deg, #EEF4FA 0%, #D9E8F5 100%)",
+        "dark": "linear-gradient(135deg, #14181A 0%, #1D3042 100%)",
+        "icon": "🌊",
+    },
+    "Purple": {
+        "light": "linear-gradient(135deg, #F5F0FA 0%, #E8DDF2 100%)",
+        "dark": "linear-gradient(135deg, #14181A 0%, #30263A 100%)",
+        "icon": "🌙",
+    },
+}
+
+if st.session_state.custom_wallpaper:
+    wallpaper_background = (
+        f'url("data:image/png;base64,{st.session_state.custom_wallpaper}")'
+    )
+else:
+    wallpaper_mode = "dark" if st.session_state.dark_mode else "light"
+    wallpaper_background = WALLPAPERS[st.session_state.wallpaper][wallpaper_mode]
 
 # ----------------------------------------------------------------------------
 # Look & feel
@@ -121,6 +163,11 @@ st.markdown(
 
     .stApp {{
         background-color: {C["bg"]};
+        background-image: {wallpaper_background};
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+        background-attachment: fixed;
         color: {C["text"]};
     }}
 
@@ -185,7 +232,61 @@ st.markdown(
 # ----------------------------------------------------------------------------
 with st.sidebar:
     st.title("📚 Company Knowledge Base")
+    # Wallpaper Background
+    with st.expander("🖼️ Wallpaper Background"):
+        st.caption("Choose a background")
 
+        wallpaper_cols = st.columns(4)
+        wallpaper_names = list(WALLPAPERS.keys())
+
+        for index, wallpaper_name in enumerate(wallpaper_names):
+            with wallpaper_cols[index]:
+                st.markdown(
+                    f"<div style='text-align:center; font-size:28px;'>"
+                    f"{WALLPAPERS[wallpaper_name]['icon']}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+                if st.button(
+                    wallpaper_name,
+                    key=f"wallpaper_{index}",
+                    use_container_width=True,
+                ):
+                    st.session_state.wallpaper = wallpaper_name
+                    st.session_state.custom_wallpaper = None
+                    st.rerun()
+
+        st.divider()
+
+        st.caption("Add your own background")
+
+        custom_background = st.file_uploader(
+            "Upload background image",
+            type=["png", "jpg", "jpeg"],
+            key="custom_background_upload",
+        )
+
+        if custom_background is not None:
+            st.image(custom_background, caption="Background Preview")
+
+            if st.button("Save Background", use_container_width=True):
+                image_bytes = custom_background.getvalue()
+                encoded_image = base64.b64encode(image_bytes).decode()
+
+                st.session_state.custom_wallpaper = encoded_image
+                st.rerun()
+
+        if st.session_state.custom_wallpaper:
+            if st.button(
+                "Remove Custom Background",
+                use_container_width=True,
+            ):
+                st.session_state.custom_wallpaper = None
+                st.session_state.wallpaper = "Default"
+                st.rerun()
+
+    st.divider()
     st.subheader("Uploaded Documents")
     if st.session_state.uploaded_documents:
         for doc in st.session_state.uploaded_documents:
