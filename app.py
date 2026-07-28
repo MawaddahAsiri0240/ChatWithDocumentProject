@@ -18,7 +18,6 @@ import json
 from pypdf import PdfReader
 from anthropic import Anthropic
 
-
 # The API key is read from Streamlit "secrets" so it never lives in the code.
 # See the README for how to add the secret before running.
 client = Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
@@ -47,7 +46,8 @@ if "doc_summaries" not in st.session_state:
 
 if "doc_pages" not in st.session_state:
     st.session_state.doc_pages = {}
-    
+
+
 def extract_pages(uploaded_file):
     """Pull the plain text out of an uploaded PDF, one entry per page.
 
@@ -62,6 +62,31 @@ def extract_pages(uploaded_file):
     for i, page in enumerate(reader.pages, start=1):
         pages.append({"page": i, "text": page.extract_text() or ""})
     return pages
+
+
+def summarize_document(pages):
+    """Ask Claude for a short, plain-language summary of the document.
+
+    Feeds the document summary card -- shown right after upload, so the
+    user gets a quick sense of what's in the file before asking anything.
+    """
+    document_text = "\n\n".join(p["text"] for p in pages)
+    prompt = f"""
+Summarize the following document in 2-3 short sentences, in plain language.
+Focus on what the document actually is and its main topic or purpose.
+Do not use outside knowledge, only summarize what's in the text below.
+
+Document:
+{document_text}
+
+Summary:
+"""
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=200,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.content[0].text.strip()
 
 
 def answer_question(pages, question):
@@ -230,7 +255,7 @@ C = DARK if st.session_state.dark_mode else LIGHT
 # Wallpaper backgrounds
 # ----------------------------------------------------------------------------
 WALLPAPERS = {
-"Rose": {
+    "Rose": {
         "light": "linear-gradient(135deg, #FFF1F3 0%, #FFDDE3 100%)",
         "dark": "linear-gradient(135deg, #2A171D 0%, #4A2732 100%)",
         "light_preview": "#F5B8C2",
@@ -271,6 +296,7 @@ else:
     wallpaper_size = "cover"
     wallpaper_position = "center"
     wallpaper_repeat = "no-repeat"
+
 # ----------------------------------------------------------------------------
 # Look & feel
 # ----------------------------------------------------------------------------
@@ -294,7 +320,6 @@ st.markdown(
         background-attachment: fixed;
         color: {C["text"]};
     }}
-    
 
     /* ---------- Header block ---------- */
     .nqb-eyebrow {{
@@ -471,6 +496,37 @@ st.markdown(
         border-radius: 16px;
         color: {C["text"]};
     }}
+
+    /* ---------- Document summary card (added feature) ---------- */
+    .nqb-summary {{
+        background-color: {C["surface_alt"]};
+        border: 1px solid {C["border"]};
+        border-radius: 20px;
+        box-shadow: {C["shadow"]};
+        padding: 1rem 1.2rem;
+        margin-bottom: 0.8rem;
+    }}
+    .nqb-summary-stats {{
+        display: flex;
+        gap: 1.4rem;
+        margin-bottom: 0.5rem;
+    }}
+    .nqb-summary-value {{
+        font-family: 'Baloo 2', sans-serif;
+        font-size: 1.4rem;
+        font-weight: 700;
+        color: {C["accent"]};
+    }}
+    .nqb-summary-label {{
+        font-size: 0.72rem;
+        color: {C["muted"]};
+    }}
+    .nqb-summary-text {{
+        font-size: 0.9rem;
+        color: {C["text"]};
+        border-top: 1px dashed {C["border"]};
+        padding-top: 0.5rem;
+    }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -496,29 +552,38 @@ with st.sidebar:
             st.rerun()
 
         wallpaper_names = ["Rose", "Mint", "Blue", "Purple"]
-        wallpaper_cols = st.columns(4)
         preview_mode = "dark" if st.session_state.dark_mode else "light"
 
+        wallpaper_row_1 = st.columns(2)
+        wallpaper_row_2 = st.columns(2)
+
         for index, wallpaper_name in enumerate(wallpaper_names):
-            with wallpaper_cols[index]:
+            target_column = wallpaper_row_1[index] if index < 2 else wallpaper_row_2[index - 2]
+
+            with target_column:
                 preview_color = WALLPAPERS[wallpaper_name][f"{preview_mode}_preview"]
 
                 st.markdown(
                     f"""
                     <div style="
-                        width: 30px;
-                        height: 30px;
+                        width: 34px;
+                        height: 34px;
                         background: {preview_color};
-                        border-radius: 4px;
+                        border-radius: 6px;
                         margin: 0 auto 4px auto;
                         border: 1px solid rgba(120,120,120,0.25);
                     "></div>
+                    <div style="
+                        text-align: center;
+                        font-size: 0.72rem;
+                        margin-bottom: 0.25rem;
+                    ">{wallpaper_name}</div>
                     """,
                     unsafe_allow_html=True,
                 )
 
                 if st.button(
-                    wallpaper_name,
+                    "Choose",
                     key=f"wallpaper_{wallpaper_name}",
                     use_container_width=True,
                 ):
@@ -528,7 +593,6 @@ with st.sidebar:
     st.divider()
 
     st.subheader("Documents")
-
     if st.session_state.uploaded_documents:
         for i, doc in enumerate(st.session_state.uploaded_documents, start=1):
             st.markdown(
