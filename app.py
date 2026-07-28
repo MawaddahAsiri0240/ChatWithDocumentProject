@@ -30,9 +30,12 @@ if "chat_history" not in st.session_state:
 if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = False
 
+if "doc_summaries" not in st.session_state:
+    st.session_state.doc_summaries = {}
+
 
 def extract_text(uploaded_file):
-    """Pull the plain text out of an uploaded PDF.
+    """Pull the plain text out of an uploaded PDF, plus a page count.
 
     Real PDFs are messy: some pages return empty text, some have odd spacing.
     This gets you started; handling the messiness is part of the learning.
@@ -41,7 +44,31 @@ def extract_text(uploaded_file):
     pages = []
     for page in reader.pages:
         pages.append(page.extract_text() or "")
-    return "\n".join(pages)
+    return "\n".join(pages), len(reader.pages)
+
+
+def summarize_document(document_text):
+    """Ask Claude for a short, plain-language summary of the document.
+
+    Feeds the new "document summary card" -- shown right after upload, so
+    the user gets a quick sense of what's in the file before asking anything.
+    """
+    prompt = f"""
+Summarize the following document in 2-3 short sentences, in plain language.
+Focus on what the document actually is and its main topic or purpose.
+Do not use outside knowledge, only summarize what's in the text below.
+
+Document:
+{document_text}
+
+Summary:
+"""
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=200,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.content[0].text.strip()
 
 
 def answer_question(document_text, question):
@@ -83,25 +110,33 @@ Answer:
 
 
 # ----------------------------------------------------------------------------
-# Dark mode colors
+# Palettes
 # ----------------------------------------------------------------------------
 LIGHT = {
-    "bg": "#FAFAF9",
+    "bg": "#FBF9F5",
     "surface": "#FFFFFF",
-    "text": "#18181B",
-    "muted": "#71717A",
-    "border": "#E4E4E7",
+    "surface_2": "#F3EFE7",
+    "text": "#211F1C",
+    "muted": "#7A7468",
+    "border": "#E7E1D3",
     "accent": "#2F6F5E",
     "accent_hover": "#255A4C",
+    "accent_soft": "#E6F0ED",
+    "gold": "#C9A24B",
+    "shadow": "rgba(47, 111, 94, 0.10)",
 }
 DARK = {
     "bg": "#14181A",
-    "surface": "#1C2226",
-    "text": "#EDEDED",
-    "muted": "#9CA3AF",
-    "border": "#2C3438",
-    "accent": "#3F9C85",
-    "accent_hover": "#4FB99E",
+    "surface": "#1B2124",
+    "surface_2": "#20272A",
+    "text": "#F2F1ED",
+    "muted": "#9CA3A2",
+    "border": "#2C3538",
+    "accent": "#45AB92",
+    "accent_hover": "#57C2A6",
+    "accent_soft": "#1E332D",
+    "gold": "#D8B865",
+    "shadow": "rgba(0, 0, 0, 0.35)",
 }
 C = DARK if st.session_state.dark_mode else LIGHT
 
@@ -113,7 +148,7 @@ st.set_page_config(page_title="Ask your document", page_icon="📄", layout="cen
 st.markdown(
     f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
     html, body, [class*="css"] {{
         font-family: 'IBM Plex Sans', sans-serif;
@@ -125,55 +160,143 @@ st.markdown(
     }}
 
     h1 {{
+        font-family: 'Fraunces', serif;
         font-weight: 600;
-        letter-spacing: -0.02em;
-        color: {C["text"]};
+        font-size: 2.5rem !important;
+        letter-spacing: -0.01em;
+        color: {C["text"]} !important;
+    }}
+    h2, h3, h4, h5, h6 {{
+        font-weight: 600;
+        color: {C["text"]} !important;
     }}
 
-    .stCaption, [data-testid="stCaptionContainer"], p {{
-        color: {C["muted"]};
+    label,
+    [data-testid="stWidgetLabel"] p,
+    [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMarkdownContainer"] span,
+    .stMarkdown,
+    span {{
+        color: {C["text"]} !important;
+    }}
+
+    .stCaption, [data-testid="stCaptionContainer"] {{
+        color: {C["muted"]} !important;
+        font-style: italic;
+    }}
+
+    .hairline {{
+        height: 1px;
+        background: linear-gradient(to right, {C["gold"]}, transparent 70%);
+        margin: 0.5rem 0 1.4rem 0;
+        width: 55%;
     }}
 
     section[data-testid="stSidebar"] {{
-        background-color: {C["surface"]};
+        background-color: {C["surface_2"]};
         border-right: 1px solid {C["border"]};
+    }}
+    section[data-testid="stSidebar"] h1 {{
+        font-size: 1.5rem !important;
     }}
 
     [data-testid="stFileUploaderDropzone"] {{
         background-color: {C["surface"]};
-        border: 1px solid {C["border"]} !important;
-        border-radius: 8px !important;
+        border: 1px dashed {C["border"]} !important;
+        border-radius: 10px !important;
+    }}
+    [data-testid="stFileUploaderDropzone"] small,
+    [data-testid="stFileUploaderDropzone"] span {{
+        color: {C["muted"]} !important;
     }}
 
     .stTextInput > div > div {{
         background-color: {C["surface"]};
         border: 1px solid {C["border"]} !important;
-        border-radius: 8px !important;
+        border-radius: 10px !important;
     }}
     .stTextInput input {{
         color: {C["text"]} !important;
     }}
+    .stTextInput input::placeholder {{
+        color: {C["muted"]} !important;
+        opacity: 0.8;
+    }}
 
     .stButton > button {{
         background-color: {C["accent"]};
-        color: #FFFFFF;
+        color: #FFFFFF !important;
         border: none;
-        border-radius: 6px;
+        border-radius: 8px;
         font-weight: 500;
+        padding: 0.5rem 1.3rem;
+        transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+    }}
+    .stButton > button p {{
+        color: #FFFFFF !important;
     }}
     .stButton > button:hover {{
         background-color: {C["accent_hover"]};
-        color: #FFFFFF;
+        transform: translateY(-1px);
+        box-shadow: 0 6px 14px {C["shadow"]};
+    }}
+
+    [data-testid="stAlert"] {{
+        background-color: {C["accent_soft"]};
+        border: 1px solid {C["border"]};
+        border-radius: 10px;
+    }}
+    [data-testid="stAlert"] p {{
+        color: {C["text"]} !important;
     }}
 
     [data-testid="stChatMessage"] {{
         background-color: {C["surface"]};
         border: 1px solid {C["border"]};
-        border-radius: 8px;
+        border-radius: 12px;
+        box-shadow: 0 2px 10px {C["shadow"]};
     }}
 
     [data-testid="stToggle"] label p {{
         color: {C["text"]} !important;
+    }}
+
+    hr {{
+        border-color: {C["border"]} !important;
+    }}
+
+    /* Document summary card */
+    .summary-card {{
+        background: linear-gradient(180deg, {C["surface"]} 0%, {C["surface_2"]} 100%);
+        border: 1px solid {C["border"]};
+        border-radius: 12px;
+        padding: 1rem 1.3rem;
+        margin: 0.6rem 0 1.2rem 0;
+    }}
+    .summary-stats {{
+        display: flex;
+        gap: 1.5rem;
+        margin-bottom: 0.6rem;
+    }}
+    .summary-stat-value {{
+        font-family: 'Fraunces', serif;
+        font-size: 1.4rem;
+        font-weight: 600;
+        color: {C["accent"]};
+    }}
+    .summary-stat-label {{
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.68rem;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: {C["muted"]};
+    }}
+    .summary-text {{
+        font-size: 0.95rem;
+        line-height: 1.5;
+        color: {C["text"]};
+        border-top: 1px solid {C["border"]};
+        padding-top: 0.6rem;
     }}
     </style>
     """,
@@ -184,12 +307,12 @@ st.markdown(
 # Sidebar — document list + chat history
 # ----------------------------------------------------------------------------
 with st.sidebar:
-    st.title("📚 Company Knowledge Base")
+    st.title("📚 Knowledge Base")
 
     st.subheader("Uploaded Documents")
     if st.session_state.uploaded_documents:
         for doc in st.session_state.uploaded_documents:
-            st.write(doc)
+            st.write(f"📄 {doc}")
     else:
         st.caption("No documents uploaded.")
 
@@ -218,13 +341,44 @@ with top_left:
 with top_right:
     st.toggle("🌙 Dark", key="dark_mode")
 
+st.markdown('<div class="hairline"></div>', unsafe_allow_html=True)
+
 uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
 
 if uploaded_file is not None:
     if uploaded_file.name not in st.session_state.uploaded_documents:
         st.session_state.uploaded_documents.append(uploaded_file.name)
 
-    document_text = extract_text(uploaded_file)
+    document_text, page_count = extract_text(uploaded_file)
+    word_count = len(document_text.split())
+
+    # ---- Document summary card ---------------------------------------------
+    # Generate the summary once per file (cached in session_state) so we
+    # don't re-call the API on every rerun/keystroke.
+    if uploaded_file.name not in st.session_state.doc_summaries:
+        with st.spinner("Summarizing document..."):
+            st.session_state.doc_summaries[uploaded_file.name] = summarize_document(document_text)
+
+    summary_text = st.session_state.doc_summaries[uploaded_file.name]
+
+    st.markdown(
+        f"""
+        <div class="summary-card">
+            <div class="summary-stats">
+                <div>
+                    <div class="summary-stat-value">{page_count}</div>
+                    <div class="summary-stat-label">Pages</div>
+                </div>
+                <div>
+                    <div class="summary-stat-value">{word_count:,}</div>
+                    <div class="summary-stat-label">Words</div>
+                </div>
+            </div>
+            <div class="summary-text">{summary_text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # TODO 2 (important!): a long document may be too big to send in one go.
     # For now the whole thing is sent, which works for short PDFs. Once the
