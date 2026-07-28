@@ -17,7 +17,7 @@ import pandas as pd
 import json
 from pypdf import PdfReader
 from anthropic import Anthropic
-import base64
+
 
 # The API key is read from Streamlit "secrets" so it never lives in the code.
 # See the README for how to add the secret before running.
@@ -37,21 +37,17 @@ if "generated_charts" not in st.session_state:
     st.session_state.generated_charts = []
 
 if "dark_mode" not in st.session_state:
-    st.session_state.dark_mode = True
+    st.session_state.dark_mode = False
 
 if "wallpaper" not in st.session_state:
-    st.session_state.wallpaper = "Default"
-
-if "custom_wallpaper" not in st.session_state:
-    st.session_state.custom_wallpaper = None
-
+    st.session_state.wallpaper = "Default"   
+    
 if "doc_summaries" not in st.session_state:
     st.session_state.doc_summaries = {}
 
 if "doc_pages" not in st.session_state:
     st.session_state.doc_pages = {}
-
-
+    
 def extract_pages(uploaded_file):
     """Pull the plain text out of an uploaded PDF, one entry per page.
 
@@ -66,31 +62,6 @@ def extract_pages(uploaded_file):
     for i, page in enumerate(reader.pages, start=1):
         pages.append({"page": i, "text": page.extract_text() or ""})
     return pages
-
-
-def summarize_document(pages):
-    """Ask Claude for a short, plain-language summary of the document.
-
-    Feeds the document summary card -- shown right after upload, so the
-    user gets a quick sense of what's in the file before asking anything.
-    """
-    document_text = "\n\n".join(p["text"] for p in pages)
-    prompt = f"""
-Summarize the following document in 2-3 short sentences, in plain language.
-Focus on what the document actually is and its main topic or purpose.
-Do not use outside knowledge, only summarize what's in the text below.
-
-Document:
-{document_text}
-
-Summary:
-"""
-    response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=200,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.content[0].text.strip()
 
 
 def answer_question(pages, question):
@@ -259,36 +230,47 @@ C = DARK if st.session_state.dark_mode else LIGHT
 # Wallpaper backgrounds
 # ----------------------------------------------------------------------------
 WALLPAPERS = {
-    "Default": {
-        "light": "none",
-        "dark": "none",
-        "icon": "⬜",
+"Rose": {
+        "light": "linear-gradient(135deg, #FFF1F3 0%, #FFDDE3 100%)",
+        "dark": "linear-gradient(135deg, #2A171D 0%, #4A2732 100%)",
+        "light_preview": "#F5B8C2",
+        "dark_preview": "#6B3544",
     },
-    "Soft Gradient": {
-        "light": "linear-gradient(135deg, #F8F4EC 0%, #E4EFE9 100%)",
-        "dark": "linear-gradient(135deg, #14181A 0%, #24332F 100%)",
-        "icon": "🌿",
+    "Mint": {
+        "light": "linear-gradient(135deg, #F0FFF9 0%, #D5F5E8 100%)",
+        "dark": "linear-gradient(135deg, #14251F 0%, #25443A 100%)",
+        "light_preview": "#A9DDC8",
+        "dark_preview": "#356B59",
     },
     "Blue": {
-        "light": "linear-gradient(135deg, #EEF4FA 0%, #D9E8F5 100%)",
-        "dark": "linear-gradient(135deg, #14181A 0%, #1D3042 100%)",
-        "icon": "🌊",
+        "light": "linear-gradient(135deg, #EEF6FF 0%, #D6E9FA 100%)",
+        "dark": "linear-gradient(135deg, #151F2C 0%, #243C55 100%)",
+        "light_preview": "#A9CDEB",
+        "dark_preview": "#345B7C",
     },
     "Purple": {
-        "light": "linear-gradient(135deg, #F5F0FA 0%, #E8DDF2 100%)",
-        "dark": "linear-gradient(135deg, #14181A 0%, #30263A 100%)",
-        "icon": "🌙",
+        "light": "linear-gradient(135deg, #F7F1FF 0%, #E5D8F5 100%)",
+        "dark": "linear-gradient(135deg, #20182C 0%, #3C2A50 100%)",
+        "light_preview": "#C9AFE5",
+        "dark_preview": "#60487B",
     },
 }
 
-if st.session_state.custom_wallpaper:
-    wallpaper_background = (
-        f'url("data:image/png;base64,{st.session_state.custom_wallpaper}")'
-    )
-else:
-    wallpaper_mode = "dark" if st.session_state.dark_mode else "light"
-    wallpaper_background = WALLPAPERS[st.session_state.wallpaper][wallpaper_mode]
+wallpaper_mode = "dark" if st.session_state.dark_mode else "light"
 
+if st.session_state.wallpaper == "Default":
+    wallpaper_background = (
+        f"radial-gradient({C['dot1']} 22%, transparent 23%), "
+        f"radial-gradient({C['dot2']} 22%, transparent 23%)"
+    )
+    wallpaper_size = "90px 90px"
+    wallpaper_position = "0 0, 45px 45px"
+    wallpaper_repeat = "repeat"
+else:
+    wallpaper_background = WALLPAPERS[st.session_state.wallpaper][wallpaper_mode]
+    wallpaper_size = "cover"
+    wallpaper_position = "center"
+    wallpaper_repeat = "no-repeat"
 # ----------------------------------------------------------------------------
 # Look & feel
 # ----------------------------------------------------------------------------
@@ -306,12 +288,13 @@ st.markdown(
     .stApp {{
         background-color: {C["bg"]};
         background-image: {wallpaper_background};
-        background-size: cover;
-        background-position: center;
-        background-repeat: no-repeat;
+        background-size: {wallpaper_size};
+        background-position: {wallpaper_position};
+        background-repeat: {wallpaper_repeat};
         background-attachment: fixed;
         color: {C["text"]};
     }}
+    
 
     /* ---------- Header block ---------- */
     .nqb-eyebrow {{
@@ -422,6 +405,13 @@ st.markdown(
         transform: translateY(-1px) scale(1.02);
     }}
 
+    section[data-testid="stSidebar"] .stButton > button {{
+        padding: 0.22rem 0.15rem;
+        font-size: 0.68rem;
+        min-height: 1.9rem;
+        border-radius: 7px;
+    }}
+
     /* ---------- Chat ---------- */
     [data-testid="stChatMessage"] {{
         background-color: {C["surface"]};
@@ -481,37 +471,6 @@ st.markdown(
         border-radius: 16px;
         color: {C["text"]};
     }}
-
-    /* ---------- Document summary card (added feature) ---------- */
-    .nqb-summary {{
-        background-color: {C["surface_alt"]};
-        border: 1px solid {C["border"]};
-        border-radius: 20px;
-        box-shadow: {C["shadow"]};
-        padding: 1rem 1.2rem;
-        margin-bottom: 0.8rem;
-    }}
-    .nqb-summary-stats {{
-        display: flex;
-        gap: 1.4rem;
-        margin-bottom: 0.5rem;
-    }}
-    .nqb-summary-value {{
-        font-family: 'Baloo 2', sans-serif;
-        font-size: 1.4rem;
-        font-weight: 700;
-        color: {C["accent"]};
-    }}
-    .nqb-summary-label {{
-        font-size: 0.72rem;
-        color: {C["muted"]};
-    }}
-    .nqb-summary-text {{
-        font-size: 0.9rem;
-        color: {C["text"]};
-        border-top: 1px dashed {C["border"]};
-        padding-top: 0.5rem;
-    }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -522,65 +481,54 @@ st.markdown(
 # ----------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("<div class='nqb-eyebrow'>Sejel Tech</div>", unsafe_allow_html=True)
-    st.title("Data Sources")
+    st.subheader("Sources")
 
     # Wallpaper Background
-    with st.expander("🖼️ Wallpaper Background"):
+    with st.expander("Wallpaper"):
         st.caption("Choose a background")
 
+        if st.button(
+            "Default",
+            key="wallpaper_default",
+            use_container_width=True,
+        ):
+            st.session_state.wallpaper = "Default"
+            st.rerun()
+
+        wallpaper_names = ["Rose", "Mint", "Blue", "Purple"]
         wallpaper_cols = st.columns(4)
-        wallpaper_names = list(WALLPAPERS.keys())
+        preview_mode = "dark" if st.session_state.dark_mode else "light"
 
         for index, wallpaper_name in enumerate(wallpaper_names):
             with wallpaper_cols[index]:
+                preview_color = WALLPAPERS[wallpaper_name][f"{preview_mode}_preview"]
+
                 st.markdown(
-                    f"<div style='text-align:center; font-size:28px;'>"
-                    f"{WALLPAPERS[wallpaper_name]['icon']}"
-                    f"</div>",
+                    f"""
+                    <div style="
+                        width: 30px;
+                        height: 30px;
+                        background: {preview_color};
+                        border-radius: 4px;
+                        margin: 0 auto 4px auto;
+                        border: 1px solid rgba(120,120,120,0.25);
+                    "></div>
+                    """,
                     unsafe_allow_html=True,
                 )
 
                 if st.button(
                     wallpaper_name,
-                    key=f"wallpaper_{index}",
+                    key=f"wallpaper_{wallpaper_name}",
                     use_container_width=True,
                 ):
                     st.session_state.wallpaper = wallpaper_name
-                    st.session_state.custom_wallpaper = None
                     st.rerun()
-
-        st.divider()
-
-        st.caption("Add your own background")
-
-        custom_background = st.file_uploader(
-            "Upload background image",
-            type=["png", "jpg", "jpeg"],
-            key="custom_background_upload",
-        )
-
-        if custom_background is not None:
-            st.image(custom_background, caption="Background Preview")
-
-            if st.button("Save Background", use_container_width=True):
-                image_bytes = custom_background.getvalue()
-                encoded_image = base64.b64encode(image_bytes).decode()
-
-                st.session_state.custom_wallpaper = encoded_image
-                st.rerun()
-
-        if st.session_state.custom_wallpaper:
-            if st.button(
-                "Remove Custom Background",
-                use_container_width=True,
-            ):
-                st.session_state.custom_wallpaper = None
-                st.session_state.wallpaper = "Default"
-                st.rerun()
 
     st.divider()
 
     st.subheader("Documents")
+
     if st.session_state.uploaded_documents:
         for i, doc in enumerate(st.session_state.uploaded_documents, start=1):
             st.markdown(
