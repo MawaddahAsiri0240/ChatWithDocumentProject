@@ -36,12 +36,11 @@ if "generated_charts" not in st.session_state:
     st.session_state.generated_charts = []
 
 if "dark_mode" not in st.session_state:
-    st.session_state.dark_mode = True
+    st.session_state.dark_mode = False
 
 if "wallpaper" not in st.session_state:
-    st.session_state.wallpaper = "Default"
-
-
+    st.session_state.wallpaper = "Default"   
+    
 if "doc_summaries" not in st.session_state:
     st.session_state.doc_summaries = {}
 
@@ -431,6 +430,13 @@ st.markdown(
         transform: translateY(-1px) scale(1.02);
     }}
 
+    section[data-testid="stSidebar"] .stButton > button {{
+        padding: 0.22rem 0.15rem;
+        font-size: 0.68rem;
+        min-height: 1.9rem;
+        border-radius: 7px;
+    }}
+
     /* ---------- Chat ---------- */
     [data-testid="stChatMessage"] {{
         background-color: {C["surface"]};
@@ -531,13 +537,17 @@ st.markdown(
 # ----------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("<div class='nqb-eyebrow'>Sejel Tech</div>", unsafe_allow_html=True)
-    st.title("Data Sources")
+    st.subheader("Sources")
 
     # Wallpaper Background
     with st.expander("Wallpaper"):
         st.caption("Choose a background")
 
-        if st.button("Default", key="wallpaper_default"):
+        if st.button(
+            "Default",
+            key="wallpaper_default",
+            use_container_width=True,
+        ):
             st.session_state.wallpaper = "Default"
             st.rerun()
 
