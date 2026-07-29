@@ -443,7 +443,7 @@ def search_document(pages, query, context_chars=60):
 def generate_flashcards(pages, n=5):
     """Ask Claude to turn a document into a small set of study flashcards.
 
-    Used for the "Study" mode inside the Test tab -- same underlying Q&A
+    Used for the "Flashcards" mode inside the Study Mode tab -- same underlying Q&A
     pairs also power Quiz mode, generated separately with graded options.
     """
     document_text = "\n\n".join(p["text"] for p in pages)
@@ -540,8 +540,8 @@ LIGHT = {
     "bg": "#FBF7FF",
     "surface": "#FFFFFF",
     "surface_alt": "#F3ECFF",
-    "text": "#241B3D",
-    "muted": "#8577A3",
+    "text": "#000000",
+    "muted": "#5A5470",
     "border": "#E9DFFF",
     "accent": "#FF7A85",
     "accent2": "#4ECDC4",
@@ -556,8 +556,8 @@ DARK = {
     "bg": "#181327",
     "surface": "#2A2344",
     "surface_alt": "#332B54",
-    "text": "#F3EEFF",
-    "muted": "#B6ABDA",
+    "text": "#FFFFFF",
+    "muted": "#C9C0E8",
     "border": "#473C6E",
     "accent": "#FF8FA3",
     "accent2": "#5EEAD4",
@@ -800,6 +800,29 @@ st.markdown(
         color: {C["text"]} !important;
         font-family: 'Baloo 2', sans-serif;
         font-size: 0.85rem;
+    }}
+
+    /* Native widgets that don't fully inherit the theme by default */
+    .stRadio label p, .stRadio div[role="radiogroup"] label {{
+        color: {C["text"]} !important;
+    }}
+    [data-testid="stExpander"] summary,
+    [data-testid="stExpander"] summary p,
+    [data-testid="stExpander"] summary span {{
+        color: {C["text"]} !important;
+    }}
+    .stSelectbox label, .stSelectbox div[data-baseweb="select"] * {{
+        color: {C["text"]} !important;
+    }}
+    .stTextArea label, .stTextArea textarea {{
+        color: {C["text"]} !important;
+    }}
+    .stMarkdown, .stMarkdown p, .stMarkdown li,
+    [data-testid="stMarkdownContainer"] {{
+        color: {C["text"]};
+    }}
+    label, [data-testid="stWidgetLabel"] p {{
+        color: {C["text"]} !important;
     }}
 
     hr {{
@@ -1415,8 +1438,8 @@ if st.session_state.screen == "pdf":
                     height=250,
                 )
 
-        # ---- Ask / Test tabs (added feature) --------------------------------
-        ask_tab, test_tab = st.tabs(["Ask", "Test"])
+        # ---- Ask / Study Mode tabs (added feature) --------------------------
+        ask_tab, test_tab = st.tabs(["Ask", "Study Mode"])
 
         with ask_tab:
             # ---- Starter questions ----------------------------------------
@@ -1448,7 +1471,7 @@ if st.session_state.screen == "pdf":
 
             question = st.text_input(
                 "Your question",
-                placeholder="e.g. What columns does this dataset contain?",
+                placeholder="e.g. What is the main conclusion of this report?",
             )
 
             if st.button("Ask", key="ask_pdf") and question:
@@ -1481,7 +1504,7 @@ if st.session_state.screen == "pdf":
                         st.markdown("**Sources**")
                         for c in citations:
                             st.markdown(
-                                f"<div class='nqb-row'>"
+                                f"<div class='nqb-row' style='max-width: 420px; margin-left: 0;'>"
                                 f"<span class='nqb-row-index'>p{c.get('page', '?')}</span>"
                                 f"<span>&ldquo;{c.get('excerpt', '')}&rdquo;</span>"
                                 f"</div>",
@@ -1490,7 +1513,7 @@ if st.session_state.screen == "pdf":
 
                     if chat.get("library_prompt"):
                         st.caption("Would you like to add this document to your library?")
-                        library_yes, library_no = st.columns(2)
+                        library_yes, library_no, _spacer = st.columns([1, 1, 3])
 
                         with library_yes:
                             if st.button("Yes", key=f"library_yes_{chat_index}", use_container_width=True):
@@ -1510,10 +1533,10 @@ if st.session_state.screen == "pdf":
 
         with test_tab:
             test_choice = st.radio(
-                "Mode", ["Study (flashcards)", "Quiz"], horizontal=True, key=f"test_mode_choice_{selected_doc}"
+                "Mode", ["Flashcards", "Quiz"], horizontal=True, key=f"test_mode_choice_{selected_doc}"
             )
 
-            if test_choice == "Study (flashcards)":
+            if test_choice == "Flashcards":
                 if selected_doc not in st.session_state.test_cards:
                     with st.spinner("Generating flashcards..."):
                         st.session_state.test_cards[selected_doc] = generate_flashcards(pages)
