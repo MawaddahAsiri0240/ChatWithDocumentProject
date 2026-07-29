@@ -80,6 +80,9 @@ if "dataset_chat_history" not in st.session_state:
 if "test_mode" not in st.session_state:
     st.session_state.test_mode = False
 
+if "test_toggle_enabled" not in st.session_state:
+    st.session_state.test_toggle_enabled = False
+
 if "test_doc" not in st.session_state:
     st.session_state.test_doc = None
 
@@ -422,12 +425,6 @@ def icon_pattern_layer(emoji, tile=64, opacity=0.14):
 # ----------------------------------------------------------------------------
 # New feature functions: reading time, search, flashcards/quiz, translation
 # ----------------------------------------------------------------------------
-def estimate_reading_time(word_count, wpm=260):
-    """Rough reading time estimate. No API call -- plain arithmetic based on
-    an average adult reading speed (~260 wpm for silent reading)."""
-    return max(1, round(word_count / wpm))
-
-
 def search_document(pages, query, context_chars=60):
     """Plain-text search across a document's pages. No API call -- just a
     case-insensitive substring search with a bit of surrounding context per
@@ -1466,7 +1463,6 @@ if st.session_state.screen == "pdf":
             pages_f = st.session_state.doc_pages[f.name]
             page_count = len(pages_f)
             word_count = sum(len(p["text"].split()) for p in pages_f)
-            reading_minutes = estimate_reading_time(word_count)
             summary_text = st.session_state.doc_summaries[f.name]
 
             st.markdown(f"**{f.name}**")
@@ -1481,10 +1477,6 @@ if st.session_state.screen == "pdf":
                         <div>
                             <div class="nqb-summary-value">{word_count:,}</div>
                             <div class="nqb-summary-label">Words</div>
-                        </div>
-                        <div>
-                            <div class="nqb-summary-value">⏱️ {reading_minutes}m</div>
-                            <div class="nqb-summary-label">Reading time</div>
                         </div>
                     </div>
                     <div class="nqb-summary-text">{summary_text}</div>
@@ -1527,13 +1519,15 @@ if st.session_state.screen == "pdf":
                 else:
                     st.caption("No matches found.")
 
-        if st.button("🧪 Test yourself", key=f"test_btn_{selected_doc}"):
-            st.session_state.test_mode = True
-            st.session_state.test_doc = selected_doc
-            st.session_state.flashcard_index = 0
-            st.session_state.flashcard_show_answer = False
-            st.session_state.quiz_submitted = False
-            st.rerun()
+        st.toggle("Test mode", key="test_toggle_enabled")
+        if st.session_state.test_toggle_enabled:
+            if st.button("Test yourself", key=f"test_btn_{selected_doc}"):
+                st.session_state.test_mode = True
+                st.session_state.test_doc = selected_doc
+                st.session_state.flashcard_index = 0
+                st.session_state.flashcard_show_answer = False
+                st.session_state.quiz_submitted = False
+                st.rerun()
 
         with st.expander("🌐 Translate this document"):
             translate_lang = st.selectbox(
