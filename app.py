@@ -15,6 +15,7 @@ WHERE YOUR WORK IS
 import streamlit as st
 import pandas as pd
 import json
+import re
 import urllib.parse
 from pypdf import PdfReader
 from anthropic import Anthropic
@@ -40,8 +41,8 @@ if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = False
 
 if "wallpaper" not in st.session_state:
-    st.session_state.wallpaper = "Default"   
-    
+    st.session_state.wallpaper = "Default"
+
 if "doc_summaries" not in st.session_state:
     st.session_state.doc_summaries = {}
 
@@ -54,6 +55,15 @@ if "library" not in st.session_state:
 if "show_library" not in st.session_state:
     st.session_state.show_library = False
 
+if "library_view" not in st.session_state:
+    st.session_state.library_view = "all"
+
+if "library_favorites" not in st.session_state:
+    st.session_state.library_favorites = []
+
+if "library_page" not in st.session_state:
+    st.session_state.library_page = 0
+
 if "screen" not in st.session_state:
     st.session_state.screen = "welcome"
 
@@ -65,6 +75,31 @@ if "dataset_starter_questions" not in st.session_state:
 
 if "dataset_chat_history" not in st.session_state:
     st.session_state.dataset_chat_history = []
+
+# ---- New feature state: search, test (flashcards/quiz), translate --------
+if "test_mode" not in st.session_state:
+    st.session_state.test_mode = False
+
+if "test_doc" not in st.session_state:
+    st.session_state.test_doc = None
+
+if "test_cards" not in st.session_state:
+    st.session_state.test_cards = {}
+
+if "test_quiz" not in st.session_state:
+    st.session_state.test_quiz = {}
+
+if "flashcard_index" not in st.session_state:
+    st.session_state.flashcard_index = 0
+
+if "flashcard_show_answer" not in st.session_state:
+    st.session_state.flashcard_show_answer = False
+
+if "quiz_submitted" not in st.session_state:
+    st.session_state.quiz_submitted = False
+
+if "doc_translations" not in st.session_state:
+    st.session_state.doc_translations = {}
 
 
 def extract_pages(uploaded_file):
@@ -385,11 +420,134 @@ def icon_pattern_layer(emoji, tile=64, opacity=0.14):
 
 
 # ----------------------------------------------------------------------------
+# New feature functions: reading time, search, flashcards/quiz, translation
+# ----------------------------------------------------------------------------
+def estimate_reading_time(word_count, wpm=260):
+    """Rough reading time estimate. No API call -- plain arithmetic based on
+    an average adult reading speed (~260 wpm for silent reading)."""
+    return max(1, round(word_count / wpm))
+
+
+def search_document(pages, query, context_chars=60):
+    """Plain-text search across a document's pages. No API call -- just a
+    case-insensitive substring search with a bit of surrounding context per
+    match, grouped by page. Fast and free.
+    """
+    if not query.strip():
+        return []
+
+    results = []
+    pattern = re.escape(query.strip())
+    for p in pages:
+        text = p["text"]
+        for m in re.finditer(pattern, text, flags=re.IGNORECASE):
+            start = max(0, m.start() - context_chars)
+            end = min(len(text), m.end() + context_chars)
+            snippet = text[start:end].strip().replace("\n", " ")
+            if start > 0:
+                snippet = "…" + snippet
+            if end < len(text):
+                snippet = snippet + "…"
+            results.append({"page": p["page"], "snippet": snippet})
+    return results
+
+
+def generate_flashcards(pages, n=5):
+    """Ask Claude to turn a document into a small set of study flashcards.
+
+    Used for the "Study" mode inside Test yourself -- same underlying Q&A
+    pairs also power Quiz mode, generated separately with graded options.
+    """
+    document_text = "\n\n".join(p["text"] for p in pages)
+    prompt = f"""
+Create {n} study flashcards from the document below. Each flashcard has a
+short question testing understanding of a key concept, and a concise answer.
+Base these ONLY on the document content.
+
+Document:
+{document_text}
+
+Respond with ONLY a JSON array, no other text, no markdown fences, in this
+exact shape:
+[{{"question": "<question>", "answer": "<answer>"}}]
+"""
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=800,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = response.content[0].text.strip()
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    try:
+        cards = json.loads(raw)
+        return [c for c in cards if isinstance(c, dict) and "question" in c and "answer" in c]
+    except json.JSONDecodeError:
+        return []
+
+
+def generate_quiz(pages, n=5):
+    """Ask Claude for a multiple-choice quiz based on the document.
+
+    Each question has 4 options and one correct index, so the app can grade
+    it automatically without another API call.
+    """
+    document_text = "\n\n".join(p["text"] for p in pages)
+    prompt = f"""
+Create a {n}-question multiple-choice quiz from the document below. Each
+question has exactly 4 options with only one correct answer. Base these
+ONLY on the document content.
+
+Document:
+{document_text}
+
+Respond with ONLY a JSON array, no other text, no markdown fences, in this
+exact shape:
+[{{"question": "<question>", "options": ["<a>", "<b>", "<c>", "<d>"], "correct_index": 0}}]
+"""
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=900,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = response.content[0].text.strip()
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    try:
+        quiz = json.loads(raw)
+        return [
+            q for q in quiz
+            if isinstance(q, dict) and "question" in q and "options" in q and "correct_index" in q
+        ]
+    except json.JSONDecodeError:
+        return []
+
+
+def translate_document(pages, target_language):
+    """Translate a document's full text into the target language.
+
+    Sends the whole document in one call -- fine for the PDF sizes this app
+    is built for. Very long documents may hit the output token limit; a
+    future improvement would chunk by page and stitch the result together.
+    """
+    document_text = "\n\n".join(p["text"] for p in pages)
+    prompt = f"""
+Translate the following document into {target_language}. Preserve the
+original structure and meaning as closely as possible. Output ONLY the
+translated text, no notes, no commentary.
+
+Document:
+{document_text}
+"""
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=4000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.content[0].text.strip()
+
+
+# ----------------------------------------------------------------------------
 # Theme tokens
 # ----------------------------------------------------------------------------
-# Bubbly, friendly register: soft pastel surfaces, big rounded corners,
-# gentle shadows instead of hard borders. Two accent colors (coral + teal)
-# rotate across tags so the UI doesn't feel monotone.
 LIGHT = {
     "bg": "#FBF7FF",
     "surface": "#FFFFFF",
@@ -501,7 +659,6 @@ st.markdown(
         color: {C["text"]};
     }}
 
-    /* ---------- Header block ---------- */
     .nqb-eyebrow {{
         display: inline-block;
         font-family: 'Baloo 2', sans-serif;
@@ -524,7 +681,6 @@ st.markdown(
         color: {C["muted"]};
     }}
 
-    /* ---------- Sidebar ---------- */
     section[data-testid="stSidebar"] {{
         background-color: {C["surface"]};
         border-right: 1px solid {C["border"]};
@@ -574,7 +730,6 @@ st.markdown(
         color: {C["text"]};
     }}
 
-    /* ---------- Inputs ---------- */
     [data-testid="stFileUploaderDropzone"] {{
         background-color: {C["surface"]};
         border: 2px dashed {C["border"]} !important;
@@ -630,7 +785,6 @@ st.markdown(
         border-radius: 7px;
     }}
 
-    /* ---------- Chat ---------- */
     [data-testid="stChatMessage"] {{
         background-color: {C["surface"]};
         border: 1px solid {C["border"]};
@@ -690,7 +844,6 @@ st.markdown(
         color: {C["text"]};
     }}
 
-    /* ---------- Document summary card (added feature) ---------- */
     .nqb-summary {{
         background-color: {C["surface_alt"]};
         border: 1px solid {C["border"]};
@@ -703,6 +856,7 @@ st.markdown(
         display: flex;
         gap: 1.4rem;
         margin-bottom: 0.5rem;
+        flex-wrap: wrap;
     }}
     .nqb-summary-value {{
         font-family: 'Baloo 2', sans-serif;
@@ -720,27 +874,119 @@ st.markdown(
         border-top: 1px dashed {C["border"]};
         padding-top: 0.5rem;
     }}
-    /* ---------- Library ---------- */
-    .nqb-library-shelf {{
-        width: 100%; min-height: 760px; display: grid;
-        grid-template-columns: repeat(5, 1fr); grid-template-rows: repeat(4, 1fr);
-        column-gap: 1.5rem; row-gap: 2.2rem; padding: 3rem 2rem 3.5rem 2rem;
-        box-sizing: border-box; margin-top: 1rem;
-        background: linear-gradient(to bottom, transparent 0%, transparent 21%, #8B5A2B 21%, #6F431F 23%, transparent 23%, transparent 46%, #8B5A2B 46%, #6F431F 48%, transparent 48%, transparent 71%, #8B5A2B 71%, #6F431F 73%, transparent 73%, transparent 96%, #8B5A2B 96%, #6F431F 100%), linear-gradient(90deg, #A96F3A 0%, #C38A52 20%, #9B6231 45%, #C58C55 70%, #8C552B 100%);
-        border: 14px solid #6B3F20; border-radius: 14px;
-        box-shadow: inset 0 0 0 5px #B67B43, inset 0 0 28px rgba(0,0,0,.25), 0 12px 25px rgba(0,0,0,.18);
-    }}
-    .nqb-library-book {{
-        width: 100%; height: 75%; align-self: end; border-radius: 6px 10px 4px 4px;
-        background: linear-gradient(90deg, rgba(0,0,0,.12), transparent 12%), {C["surface_alt"]};
-        border: 1px solid {C["border"]}; box-shadow: 4px 5px 8px rgba(0,0,0,.22), inset 4px 0 0 rgba(0,0,0,.08);
-        display: flex; flex-direction: column; align-items: center; justify-content: space-between;
-        text-align: center; color: {C["text"]}; overflow: hidden; padding: .5rem .35rem .55rem; box-sizing: border-box;
-    }}
-    .nqb-library-cover {{ flex: 1; width: 100%; display: flex; align-items: center; justify-content: center; font-size: 2rem; }}
-    .nqb-library-title {{ width: 100%; font-family: 'Baloo 2', sans-serif; font-weight: 700; font-size: .64rem; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; overflow-wrap: anywhere; padding-top: .25rem; }}
 
-    /* ---------- Welcome screen ---------- */
+    .nqb-search-hit {{
+        padding: 0.55rem 0.8rem;
+        border: 1px solid {C["border"]};
+        border-radius: 12px;
+        background-color: {C["surface"]};
+        box-shadow: {C["shadow"]};
+        margin-bottom: 0.5rem;
+        font-size: 0.85rem;
+        color: {C["text"]};
+    }}
+    .nqb-search-page {{
+        font-family: 'Baloo 2', sans-serif;
+        font-weight: 700;
+        font-size: 0.75rem;
+        color: {C["accent"]};
+        margin-bottom: 0.2rem;
+    }}
+
+    .nqb-flashcard {{
+        background-color: {C["surface"]};
+        border: 1px solid {C["border"]};
+        border-radius: 22px;
+        box-shadow: {C["shadow"]};
+        padding: 2rem 1.5rem;
+        text-align: center;
+        min-height: 160px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        margin-bottom: 0.8rem;
+    }}
+    .nqb-flashcard-label {{
+        font-family: 'Baloo 2', sans-serif;
+        font-size: 0.7rem;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: {C["accent"]};
+        margin-bottom: 0.6rem;
+    }}
+    .nqb-flashcard-text {{
+        font-size: 1.05rem;
+        color: {C["text"]};
+    }}
+
+    .nqb-library-wrap {{
+        margin-top: 0.7rem;
+        padding: 0.7rem 0.5rem 0.4rem 0.5rem;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.03);
+    }}
+
+    .nqb-library-book {{
+        height: 132px;
+        padding: 0.55rem 0.35rem 0.45rem 0.35rem;
+        border-radius: 7px 11px 5px 5px;
+        background: linear-gradient(90deg, rgba(0,0,0,.10), transparent 12%), {C["surface_alt"]};
+        border: 1px solid {C["border"]};
+        box-shadow: 3px 5px 8px rgba(0,0,0,.16), inset 3px 0 0 rgba(0,0,0,.06);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: space-between;
+        text-align: center;
+        color: {C["text"]};
+        overflow: hidden;
+        box-sizing: border-box;
+    }}
+
+    .nqb-library-cover {{
+        flex: 1;
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.65rem;
+    }}
+
+    .nqb-library-title {{
+        width: 100%;
+        font-family: 'Baloo 2', sans-serif;
+        font-weight: 700;
+        font-size: 0.62rem;
+        line-height: 1.1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        overflow-wrap: anywhere;
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+    }}
+
+    .nqb-shelf-board {{
+        height: 13px;
+        margin: 0.18rem 0 1.1rem 0;
+        border-radius: 3px;
+        background: linear-gradient(180deg, #9A673F 0%, #744728 60%, #5C351F 100%);
+        box-shadow: 0 4px 7px rgba(0,0,0,.20);
+        border-top: 1px solid rgba(255,255,255,.20);
+    }}
+
+    .nqb-library-empty-slot {{
+        height: 132px;
+        opacity: 0;
+    }}
+
+    .nqb-library-page-label {{
+        text-align: center;
+        color: {C["muted"]};
+        font-size: 0.78rem;
+        margin: 0.2rem 0 0.7rem 0;
+    }}
+
     .nqb-choice-card {{
         background-color: {C["surface"]};
         border: 1px solid {C["border"]};
@@ -775,15 +1021,10 @@ with st.sidebar:
     st.markdown("<div class='nqb-eyebrow'>Sejel Tech</div>", unsafe_allow_html=True)
     st.subheader("Sources")
 
-    # Wallpaper Background
     with st.expander("Wallpaper"):
         st.caption("Choose a background")
 
-        if st.button(
-            "Default",
-            key="wallpaper_default",
-            use_container_width=True,
-        ):
+        if st.button("Default", key="wallpaper_default", use_container_width=True):
             st.session_state.wallpaper = "Default"
             st.rerun()
 
@@ -818,17 +1059,21 @@ with st.sidebar:
                     unsafe_allow_html=True,
                 )
 
-                if st.button(
-                    "Choose",
-                    key=f"wallpaper_{wallpaper_name}",
-                    use_container_width=True,
-                ):
+                if st.button("Choose", key=f"wallpaper_{wallpaper_name}", use_container_width=True):
                     st.session_state.wallpaper = wallpaper_name
                     st.rerun()
 
     st.subheader("Library")
     if st.button("Open Library", key="open_library", use_container_width=True):
         st.session_state.show_library = True
+        st.session_state.library_view = "all"
+        st.session_state.library_page = 0
+        st.rerun()
+
+    if st.button("⭐ Favorite Library", key="open_favorite_library", use_container_width=True):
+        st.session_state.show_library = True
+        st.session_state.library_view = "favorites"
+        st.session_state.library_page = 0
         st.rerun()
 
     st.divider()
@@ -889,36 +1134,266 @@ st.divider()
 if st.session_state.show_library:
     library_title, library_back = st.columns([5, 1])
     with library_title:
-        st.title("Library")
-        st.caption("Your saved library will be displayed here.")
+        if st.session_state.library_view == "favorites":
+            st.title("⭐ Favorite Library")
+            st.caption("Documents you starred from your library.")
+        else:
+            st.title("Library")
+            st.caption("Your saved documents, organized on compact shelves.")
+
     with library_back:
         if st.button("Back", key="library_back"):
             st.session_state.show_library = False
+            st.session_state.library_view = "all"
+            st.session_state.library_page = 0
             st.rerun()
 
-    if st.session_state.library:
-        cards = []
-        for filename in st.session_state.library:
-            safe_filename = (
-                filename.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-            )
-            cards.append(
-                f"""
-                <div class="nqb-library-book">
-                    <div class="nqb-library-cover">📄</div>
-                    <div class="nqb-library-title">{safe_filename}</div>
-                </div>
-                """
+    if st.session_state.library_view == "favorites":
+        visible_files = [
+            name for name in st.session_state.library
+            if name in st.session_state.library_favorites
+        ]
+    else:
+        visible_files = list(st.session_state.library.keys())
+
+    if visible_files:
+        items_per_page = 20
+        total_pages = max(1, (len(visible_files) + items_per_page - 1) // items_per_page)
+        st.session_state.library_page = min(st.session_state.library_page, total_pages - 1)
+
+        page_start = st.session_state.library_page * items_per_page
+        page_files = visible_files[page_start:page_start + items_per_page]
+
+        if total_pages > 1:
+            previous_page, page_info, next_page = st.columns([1, 3, 1])
+
+            with previous_page:
+                if st.button(
+                    "←",
+                    key="library_prev",
+                    disabled=st.session_state.library_page == 0,
+                    use_container_width=True,
+                ):
+                    st.session_state.library_page -= 1
+                    st.rerun()
+
+            with page_info:
+                st.markdown(
+                    f"<div class='nqb-library-page-label'>Shelf page "
+                    f"{st.session_state.library_page + 1} of {total_pages}</div>",
+                    unsafe_allow_html=True,
+                )
+
+            with next_page:
+                if st.button(
+                    "→",
+                    key="library_next",
+                    disabled=st.session_state.library_page >= total_pages - 1,
+                    use_container_width=True,
+                ):
+                    st.session_state.library_page += 1
+                    st.rerun()
+
+        for row_start in range(0, len(page_files), 5):
+            row_files = page_files[row_start:row_start + 5]
+            shelf_columns = st.columns(5, gap="small")
+
+            for column_index in range(5):
+                with shelf_columns[column_index]:
+                    if column_index < len(row_files):
+                        filename = row_files[column_index]
+
+                        safe_filename = (
+                            filename.replace("&", "&amp;")
+                            .replace("<", "&lt;")
+                            .replace(">", "&gt;")
+                        )
+
+                        is_favorite = filename in st.session_state.library_favorites
+
+                        st.markdown(
+                            f"""
+                            <div class="nqb-library-book">
+                                <div class="nqb-library-cover">📄</div>
+                                <div class="nqb-library-title">{safe_filename}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+
+                        favorite_col, delete_col = st.columns(2, gap="small")
+
+                        with favorite_col:
+                            star_label = "★" if is_favorite else "☆"
+
+                            if st.button(
+                                star_label,
+                                key=f"favorite_{st.session_state.library_page}_{row_start}_{column_index}_{filename}",
+                                help="Remove from favorites" if is_favorite else "Add to favorites",
+                                use_container_width=True,
+                            ):
+                                if is_favorite:
+                                    st.session_state.library_favorites = [
+                                        name
+                                        for name in st.session_state.library_favorites
+                                        if name != filename
+                                    ]
+                                else:
+                                    st.session_state.library_favorites.append(filename)
+
+                                st.rerun()
+
+                        with delete_col:
+                            if st.button(
+                                "🗑",
+                                key=f"delete_{st.session_state.library_page}_{row_start}_{column_index}_{filename}",
+                                help="Delete from library",
+                                use_container_width=True,
+                            ):
+                                st.session_state.library.pop(filename, None)
+
+                                st.session_state.library_favorites = [
+                                    name
+                                    for name in st.session_state.library_favorites
+                                    if name != filename
+                                ]
+
+                                st.rerun()
+
+                    else:
+                        st.markdown(
+                            "<div class='nqb-library-empty-slot'></div>",
+                            unsafe_allow_html=True,
+                        )
+
+            st.markdown(
+                "<div class='nqb-shelf-board'></div>",
+                unsafe_allow_html=True,
             )
 
-        st.markdown(
-            f"<div class='nqb-library-shelf'>{''.join(cards)}</div>",
-            unsafe_allow_html=True,
-        )
     else:
-        st.info("Your library is empty. Ask a question about a PDF, then choose to save it here.")
+        if st.session_state.library_view == "favorites":
+            st.info(
+                "No favorites yet. Open Library and click ☆ on a document to favorite it."
+            )
+        else:
+            st.info(
+                "Your library is empty. Ask a question about a PDF, then choose to save it here."
+            )
+
+    st.stop()
+
+# ==============================================================================
+# TEST YOURSELF — flashcards (study mode) + quiz (graded mode)
+# ==============================================================================
+if st.session_state.test_mode:
+    test_doc = st.session_state.test_doc
+    test_pages = st.session_state.doc_pages.get(test_doc, [])
+
+    test_title, test_back = st.columns([5, 1])
+    with test_title:
+        st.title("Test yourself")
+        st.caption(test_doc or "")
+    with test_back:
+        if st.button("Back", key="test_back"):
+            st.session_state.test_mode = False
+            st.rerun()
+
+    test_choice = st.radio(
+        "Mode", ["Study (flashcards)", "Quiz"], horizontal=True, key="test_mode_choice"
+    )
+
+    if test_choice == "Study (flashcards)":
+        if test_doc not in st.session_state.test_cards:
+            with st.spinner("Generating flashcards..."):
+                st.session_state.test_cards[test_doc] = generate_flashcards(test_pages)
+
+        cards = st.session_state.test_cards.get(test_doc, [])
+
+        if not cards:
+            st.info("Couldn't generate flashcards for this document.")
+        else:
+            idx = st.session_state.flashcard_index % len(cards)
+            card = cards[idx]
+
+            st.caption(f"Card {idx + 1} of {len(cards)}")
+
+            if st.session_state.flashcard_show_answer:
+                st.markdown(
+                    f"""
+                    <div class="nqb-flashcard">
+                        <div class="nqb-flashcard-label">Answer</div>
+                        <div class="nqb-flashcard-text">{card['answer']}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f"""
+                    <div class="nqb-flashcard">
+                        <div class="nqb-flashcard-label">Question</div>
+                        <div class="nqb-flashcard-text">{card['question']}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            nav_prev, nav_flip, nav_next = st.columns(3)
+            with nav_prev:
+                if st.button("← Previous", key="fc_prev", use_container_width=True):
+                    st.session_state.flashcard_index = (idx - 1) % len(cards)
+                    st.session_state.flashcard_show_answer = False
+                    st.rerun()
+            with nav_flip:
+                flip_label = "Show question" if st.session_state.flashcard_show_answer else "Show answer"
+                if st.button(flip_label, key="fc_flip", use_container_width=True):
+                    st.session_state.flashcard_show_answer = not st.session_state.flashcard_show_answer
+                    st.rerun()
+            with nav_next:
+                if st.button("Next →", key="fc_next", use_container_width=True):
+                    st.session_state.flashcard_index = (idx + 1) % len(cards)
+                    st.session_state.flashcard_show_answer = False
+                    st.rerun()
+
+    else:
+        if test_doc not in st.session_state.test_quiz:
+            with st.spinner("Generating quiz..."):
+                st.session_state.test_quiz[test_doc] = generate_quiz(test_pages)
+
+        quiz = st.session_state.test_quiz.get(test_doc, [])
+
+        if not quiz:
+            st.info("Couldn't generate a quiz for this document.")
+        else:
+            for i, q in enumerate(quiz):
+                st.markdown(f"**{i + 1}. {q['question']}**")
+                st.radio(
+                    "Choose one",
+                    q["options"],
+                    key=f"quiz_answer_{test_doc}_{i}",
+                    label_visibility="collapsed",
+                )
+                st.write("")
+
+            if st.button("Submit quiz", key="quiz_submit"):
+                st.session_state.quiz_submitted = True
+                st.rerun()
+
+            if st.session_state.quiz_submitted:
+                correct_count = 0
+                for i, q in enumerate(quiz):
+                    selected = st.session_state.get(f"quiz_answer_{test_doc}_{i}")
+                    correct_option = q["options"][q["correct_index"]]
+                    is_correct = selected == correct_option
+                    if is_correct:
+                        correct_count += 1
+                    icon = "✅" if is_correct else "❌"
+                    st.markdown(
+                        f"<div class='nqb-row'>{icon} Q{i + 1}: correct answer — {correct_option}</div>",
+                        unsafe_allow_html=True,
+                    )
+                st.success(f"Score: {correct_count} / {len(quiz)}")
 
     st.stop()
 
@@ -991,6 +1466,7 @@ if st.session_state.screen == "pdf":
             pages_f = st.session_state.doc_pages[f.name]
             page_count = len(pages_f)
             word_count = sum(len(p["text"].split()) for p in pages_f)
+            reading_minutes = estimate_reading_time(word_count)
             summary_text = st.session_state.doc_summaries[f.name]
 
             st.markdown(f"**{f.name}**")
@@ -1006,6 +1482,10 @@ if st.session_state.screen == "pdf":
                             <div class="nqb-summary-value">{word_count:,}</div>
                             <div class="nqb-summary-label">Words</div>
                         </div>
+                        <div>
+                            <div class="nqb-summary-value">⏱️ {reading_minutes}m</div>
+                            <div class="nqb-summary-label">Reading time</div>
+                        </div>
                     </div>
                     <div class="nqb-summary-text">{summary_text}</div>
                 </div>
@@ -1020,6 +1500,60 @@ if st.session_state.screen == "pdf":
             else doc_names[0]
         )
         pages = st.session_state.doc_pages[selected_doc]
+
+        with st.expander("🔍 Search inside this document"):
+            search_query = st.text_input(
+                "Search",
+                placeholder="e.g. database",
+                key=f"search_{selected_doc}",
+                label_visibility="collapsed",
+            )
+            if search_query:
+                hits = search_document(pages, search_query)
+                if hits:
+                    st.caption(f"{len(hits)} match(es) found")
+                    for hit in hits[:15]:
+                        st.markdown(
+                            f"""
+                            <div class="nqb-search-hit">
+                                <div class="nqb-search-page">Page {hit['page']}</div>
+                                {hit['snippet']}
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                    if len(hits) > 15:
+                        st.caption(f"...and {len(hits) - 15} more matches.")
+                else:
+                    st.caption("No matches found.")
+
+        if st.button("🧪 Test yourself", key=f"test_btn_{selected_doc}"):
+            st.session_state.test_mode = True
+            st.session_state.test_doc = selected_doc
+            st.session_state.flashcard_index = 0
+            st.session_state.flashcard_show_answer = False
+            st.session_state.quiz_submitted = False
+            st.rerun()
+
+        with st.expander("🌐 Translate this document"):
+            translate_lang = st.selectbox(
+                "Translate to", ["Arabic", "English", "French"], key=f"translate_lang_{selected_doc}"
+            )
+            if st.button("Translate", key=f"translate_btn_{selected_doc}"):
+                translation_key = f"{selected_doc}::{translate_lang}"
+                with st.spinner(f"Translating to {translate_lang}..."):
+                    st.session_state.doc_translations[translation_key] = translate_document(
+                        pages, translate_lang
+                    )
+                st.rerun()
+
+            translation_key = f"{selected_doc}::{translate_lang}"
+            if translation_key in st.session_state.doc_translations:
+                st.text_area(
+                    f"Translation ({translate_lang})",
+                    value=st.session_state.doc_translations[translation_key],
+                    height=250,
+                )
 
         # ---- Starter questions (added feature) ----------------------------
         if selected_doc not in st.session_state.doc_starter_questions:
@@ -1069,6 +1603,8 @@ if st.session_state.screen == "pdf":
 
         st.markdown("**Conversation**")
         for chat_index, chat in enumerate(st.session_state.chat_history):
+            if chat.get("document") != selected_doc:
+                continue
             with st.chat_message("user"):
                 st.markdown("<span class='nqb-tag'>Question</span>", unsafe_allow_html=True)
                 st.write(chat["question"])
@@ -1093,25 +1629,18 @@ if st.session_state.screen == "pdf":
                     library_yes, library_no = st.columns(2)
 
                     with library_yes:
-                        if st.button(
-                            "Yes",
-                            key=f"library_yes_{chat_index}",
-                            use_container_width=True,
-                        ):
+                        if st.button("Yes", key=f"library_yes_{chat_index}", use_container_width=True):
                             document_name = chat.get("document")
                             if document_name:
-                                st.session_state.library[document_name] = {
-                                    "title": document_name
-                                }
+                                if document_name not in st.session_state.library:
+                                    st.session_state.library[document_name] = {
+                                        "title": document_name
+                                    }
                             chat["library_prompt"] = False
                             st.rerun()
 
                     with library_no:
-                        if st.button(
-                            "No",
-                            key=f"library_no_{chat_index}",
-                            use_container_width=True,
-                        ):
+                        if st.button("No", key=f"library_no_{chat_index}", use_container_width=True):
                             chat["library_prompt"] = False
                             st.rerun()
     else:
@@ -1158,7 +1687,6 @@ if st.session_state.screen == "csv":
 
         st.write("")
 
-        # ---- Data quality suggestions (added feature) --------------------
         quality_notes = data_quality_notes(df)
         if quality_notes:
             st.markdown("**Data quality suggestions**")
@@ -1207,7 +1735,6 @@ if st.session_state.screen == "csv":
 
         st.divider()
 
-        # ---- Ask questions about the dataset (added feature) -------------
         st.markdown("**Ask this dataset**")
 
         dataset_key = uploaded_data_file.name
