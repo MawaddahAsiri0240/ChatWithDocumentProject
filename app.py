@@ -874,8 +874,7 @@ st.markdown(
         border-top: 1px dashed {C["border"]};
         padding-top: 0.5rem;
     }}
-
-    .nqb-search-hit {{
+.nqb-search-hit {{
         padding: 0.55rem 0.8rem;
         border: 1px solid {C["border"]};
         border-radius: 12px;
@@ -892,7 +891,6 @@ st.markdown(
         color: {C["accent"]};
         margin-bottom: 0.2rem;
     }}
-
     .nqb-flashcard {{
         background-color: {C["surface"]};
         border: 1px solid {C["border"]};
@@ -918,14 +916,13 @@ st.markdown(
         font-size: 1.05rem;
         color: {C["text"]};
     }}
-
+    /* ---------- Library ---------- */
     .nqb-library-wrap {{
         margin-top: 0.7rem;
         padding: 0.7rem 0.5rem 0.4rem 0.5rem;
         border-radius: 18px;
         background: rgba(255, 255, 255, 0.03);
     }}
-
     .nqb-library-book {{
         height: 132px;
         padding: 0.55rem 0.35rem 0.45rem 0.35rem;
@@ -1269,7 +1266,7 @@ if st.session_state.show_library:
             st.markdown(
                 "<div class='nqb-shelf-board'></div>",
                 unsafe_allow_html=True,
-            )
+)
 
     else:
         if st.session_state.library_view == "favorites":
