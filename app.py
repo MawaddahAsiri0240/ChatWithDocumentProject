@@ -721,35 +721,24 @@ st.markdown(
         padding-top: 0.5rem;
     }}
     /* ---------- Library ---------- */
-    .nqb-library-grid {{
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-        gap: 1rem;
-        margin-top: 1rem;
+    .nqb-library-shelf {{
+        width: 100%; min-height: 760px; display: grid;
+        grid-template-columns: repeat(5, 1fr); grid-template-rows: repeat(4, 1fr);
+        column-gap: 1.5rem; row-gap: 2.2rem; padding: 3rem 2rem 3.5rem 2rem;
+        box-sizing: border-box; margin-top: 1rem;
+        background: linear-gradient(to bottom, transparent 0%, transparent 21%, #8B5A2B 21%, #6F431F 23%, transparent 23%, transparent 46%, #8B5A2B 46%, #6F431F 48%, transparent 48%, transparent 71%, #8B5A2B 71%, #6F431F 73%, transparent 73%, transparent 96%, #8B5A2B 96%, #6F431F 100%), linear-gradient(90deg, #A96F3A 0%, #C38A52 20%, #9B6231 45%, #C58C55 70%, #8C552B 100%);
+        border: 14px solid #6B3F20; border-radius: 14px;
+        box-shadow: inset 0 0 0 5px #B67B43, inset 0 0 28px rgba(0,0,0,.25), 0 12px 25px rgba(0,0,0,.18);
     }}
     .nqb-library-book {{
-        min-height: 185px;
-        padding: 1rem;
-        border-radius: 10px 16px 16px 10px;
-        background-color: {C["surface_alt"]};
-        border: 1px solid {C["border"]};
-        box-shadow: {C["shadow"]};
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        text-align: center;
-        color: {C["text"]};
+        width: 100%; height: 75%; align-self: end; border-radius: 6px 10px 4px 4px;
+        background: linear-gradient(90deg, rgba(0,0,0,.12), transparent 12%), {C["surface_alt"]};
+        border: 1px solid {C["border"]}; box-shadow: 4px 5px 8px rgba(0,0,0,.22), inset 4px 0 0 rgba(0,0,0,.08);
+        display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+        text-align: center; color: {C["text"]}; overflow: hidden; padding: .5rem .35rem .55rem; box-sizing: border-box;
     }}
-    .nqb-library-cover {{
-        font-size: 2.2rem;
-        padding-top: 1rem;
-    }}
-    .nqb-library-title {{
-        font-family: 'Baloo 2', sans-serif;
-        font-weight: 700;
-        font-size: 0.9rem;
-        overflow-wrap: anywhere;
-    }}
+    .nqb-library-cover {{ flex: 1; width: 100%; display: flex; align-items: center; justify-content: center; font-size: 2rem; }}
+    .nqb-library-title {{ width: 100%; font-family: 'Baloo 2', sans-serif; font-weight: 700; font-size: .64rem; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; overflow-wrap: anywhere; padding-top: .25rem; }}
 
     /* ---------- Welcome screen ---------- */
     .nqb-choice-card {{
@@ -925,7 +914,7 @@ if st.session_state.show_library:
             )
 
         st.markdown(
-            f"<div class='nqb-library-grid'>{''.join(cards)}</div>",
+            f"<div class='nqb-library-shelf'>{''.join(cards)}</div>",
             unsafe_allow_html=True,
         )
     else:
