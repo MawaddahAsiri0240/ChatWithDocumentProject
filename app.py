@@ -57,6 +57,15 @@ if "show_library" not in st.session_state:
 if "screen" not in st.session_state:
     st.session_state.screen = "welcome"
 
+if "doc_starter_questions" not in st.session_state:
+    st.session_state.doc_starter_questions = {}
+
+if "dataset_starter_questions" not in st.session_state:
+    st.session_state.dataset_starter_questions = {}
+
+if "dataset_chat_history" not in st.session_state:
+    st.session_state.dataset_chat_history = []
+
 
 def extract_pages(uploaded_file):
     """Pull the plain text out of an uploaded PDF, one entry per page.
@@ -219,6 +228,144 @@ def build_chart_dataframe(df, spec):
         return df[y].dropna()
 
     return df.iloc[:, 0].value_counts().head(20)
+
+
+def data_quality_notes(df, max_notes=5):
+    """Rule-based data-quality suggestions for an uploaded dataset.
+
+    Plain pandas checks, no API call needed -- deterministic and free.
+    Returns a list of short, human-readable notes, most important first.
+    """
+    notes = []
+    n_rows = len(df)
+
+    duplicate_rows = int(df.duplicated().sum())
+    if duplicate_rows > 0:
+        pct = round(duplicate_rows / n_rows * 100, 1) if n_rows else 0
+        notes.append(f"{duplicate_rows:,} duplicate rows found ({pct}%) — consider removing them before charting.")
+
+    for col in df.columns:
+        missing_pct = round(df[col].isna().mean() * 100, 1)
+        if missing_pct >= 30:
+            notes.append(f"Column '{col}' is {missing_pct}% missing — consider excluding it or filling gaps first.")
+
+    for col in df.columns:
+        non_null = df[col].dropna()
+        if len(non_null) == 0:
+            continue
+        unique_count = non_null.nunique()
+        if unique_count == 1:
+            notes.append(f"Column '{col}' has only one distinct value — it won't add anything to a chart.")
+        elif df[col].dtype == "object" and unique_count == n_rows and n_rows > 1:
+            notes.append(f"Column '{col}' looks like a unique ID (every value is different) — not useful for grouping.")
+
+    # Most important first: duplicates, then missing data, then low-signal columns
+    return notes[:max_notes]
+
+
+def build_dataset_profile(df, sample_rows=3, max_columns=25):
+    """Summarize a dataframe into compact text: shape, per-column stats, and
+    a small sample. This -- not the raw dataset -- is what gets sent to
+    Claude, keeping dataset Q&A fast and cheap even on large files.
+    """
+    lines = [f"Shape: {len(df):,} rows x {len(df.columns)} columns"]
+
+    for col in df.columns[:max_columns]:
+        series = df[col]
+        missing_pct = round(series.isna().mean() * 100, 1)
+        if pd.api.types.is_numeric_dtype(series):
+            desc = series.describe()
+            lines.append(
+                f"- {col} (numeric, {missing_pct}% missing): "
+                f"min={desc.get('min', 'n/a'):.2f}, mean={desc.get('mean', 'n/a'):.2f}, "
+                f"max={desc.get('max', 'n/a'):.2f}"
+            )
+        else:
+            top = series.value_counts().head(5)
+            top_str = ", ".join(f"{idx} ({cnt})" for idx, cnt in top.items())
+            lines.append(
+                f"- {col} (categorical, {missing_pct}% missing, "
+                f"{series.nunique()} unique): top values: {top_str}"
+            )
+
+    if len(df.columns) > max_columns:
+        lines.append(f"... and {len(df.columns) - max_columns} more columns not shown above.")
+
+    lines.append("\nSample rows:")
+    lines.append(df.head(sample_rows).to_string(index=False))
+
+    return "\n".join(lines)
+
+
+def answer_dataset_question(df, question):
+    """Ask Claude a plain-English question about a dataset.
+
+    Only a compact profile (column stats + a few sample rows) is sent, not
+    the full dataset -- fast, cheap, and safe on large files. The answer is
+    grounded strictly in that profile, same honesty rule as document Q&A.
+    """
+    profile = build_dataset_profile(df)
+
+    prompt = f"""
+You are answering a question about a dataset using ONLY the summary below
+(column stats and a few sample rows) -- you do not have the full dataset.
+
+Dataset summary:
+{profile}
+
+Question:
+{question}
+
+Instructions:
+1. Answer using only the summary above. Do not invent exact figures the
+   summary doesn't support.
+2. If the summary doesn't have enough detail to answer precisely, say so
+   plainly and describe what you can tell from what's available instead.
+3. Keep the answer clear and concise.
+
+Respond with ONLY a JSON object, no other text, no markdown fences:
+{{"answer": "<your answer>"}}
+"""
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = response.content[0].text.strip()
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    try:
+        return json.loads(raw).get("answer", raw)
+    except json.JSONDecodeError:
+        return raw
+
+
+def suggest_starter_questions(context_text, n=3):
+    """Generate a few example questions someone could ask about this
+    document or dataset, so the question box doesn't start out blank.
+    """
+    prompt = f"""
+Here is a summary of a document or dataset:
+
+{context_text}
+
+Suggest {n} short, specific example questions a person could ask about it.
+Keep each under 12 words.
+
+Respond with ONLY a JSON array of strings, no other text, no markdown fences:
+["question one", "question two", "question three"]
+"""
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=200,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = response.content[0].text.strip()
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    try:
+        questions = json.loads(raw)
+        return [q for q in questions if isinstance(q, str)][:n]
+    except json.JSONDecodeError:
+        return []
 
 
 def icon_pattern_layer(emoji, tile=64, opacity=0.14):
@@ -885,6 +1032,33 @@ if st.session_state.screen == "pdf":
         )
         pages = st.session_state.doc_pages[selected_doc]
 
+        # ---- Starter questions (added feature) ----------------------------
+        if selected_doc not in st.session_state.doc_starter_questions:
+            with st.spinner("Coming up with a few starter questions..."):
+                st.session_state.doc_starter_questions[selected_doc] = suggest_starter_questions(
+                    st.session_state.doc_summaries[selected_doc]
+                )
+
+        starters = st.session_state.doc_starter_questions.get(selected_doc, [])
+        if starters:
+            st.caption("Not sure where to start? Try one of these:")
+            starter_cols = st.columns(len(starters))
+            for i, s_question in enumerate(starters):
+                with starter_cols[i]:
+                    if st.button(s_question, key=f"pdf_starter_{selected_doc}_{i}", use_container_width=True):
+                        with st.spinner("Reading..."):
+                            answer, citations = answer_question(pages, s_question)
+                        st.session_state.chat_history.append(
+                            {
+                                "question": s_question,
+                                "answer": answer,
+                                "citations": citations,
+                                "document": selected_doc,
+                                "library_prompt": True,
+                            }
+                        )
+                        st.rerun()
+
         question = st.text_input(
             "Your question",
             placeholder="e.g. What columns does this dataset contain?",
@@ -994,6 +1168,18 @@ if st.session_state.screen == "csv":
                 )
 
         st.write("")
+
+        # ---- Data quality suggestions (added feature) --------------------
+        quality_notes = data_quality_notes(df)
+        if quality_notes:
+            st.markdown("**Data quality suggestions**")
+            for note in quality_notes:
+                st.markdown(
+                    f"<div class='nqb-row'><span class='nqb-row-index'>!</span>{note}</div>",
+                    unsafe_allow_html=True,
+                )
+            st.write("")
+
         st.markdown("**Quick look**")
 
         datetime_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
@@ -1029,6 +1215,54 @@ if st.session_state.screen == "csv":
 
         if not datetime_cols and not numeric_cols and not categorical_cols:
             st.info("Couldn't detect any chartable columns in this file.")
+
+        st.divider()
+
+        # ---- Ask questions about the dataset (added feature) -------------
+        st.markdown("**Ask this dataset**")
+
+        dataset_key = uploaded_data_file.name
+        if dataset_key not in st.session_state.dataset_starter_questions:
+            with st.spinner("Coming up with a few starter questions..."):
+                st.session_state.dataset_starter_questions[dataset_key] = suggest_starter_questions(
+                    build_dataset_profile(df)
+                )
+
+        dataset_starters = st.session_state.dataset_starter_questions.get(dataset_key, [])
+        if dataset_starters:
+            st.caption("Not sure where to start? Try one of these:")
+            starter_cols = st.columns(len(dataset_starters))
+            for i, s_question in enumerate(dataset_starters):
+                with starter_cols[i]:
+                    if st.button(s_question, key=f"data_starter_{dataset_key}_{i}", use_container_width=True):
+                        with st.spinner("Thinking..."):
+                            answer = answer_dataset_question(df, s_question)
+                        st.session_state.dataset_chat_history.append(
+                            {"question": s_question, "answer": answer, "dataset": dataset_key}
+                        )
+                        st.rerun()
+
+        dataset_question = st.text_input(
+            "Ask a question about this data",
+            placeholder="e.g. Which category has the highest average value?",
+        )
+
+        if st.button("Ask", key="ask_dataset") and dataset_question:
+            with st.spinner("Thinking..."):
+                answer = answer_dataset_question(df, dataset_question)
+            st.session_state.dataset_chat_history.append(
+                {"question": dataset_question, "answer": answer, "dataset": dataset_key}
+            )
+
+        for chat in st.session_state.dataset_chat_history:
+            if chat.get("dataset") != dataset_key:
+                continue
+            with st.chat_message("user"):
+                st.markdown("<span class='nqb-tag'>Question</span>", unsafe_allow_html=True)
+                st.write(chat["question"])
+            with st.chat_message("assistant"):
+                st.markdown("<span class='nqb-tag answer'>Answer</span>", unsafe_allow_html=True)
+                st.write(chat["answer"])
 
         st.divider()
 
